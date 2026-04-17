@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:video_player/video_player.dart'; // ✅ ADDED: Video Player Import
 
 import '../../../../core/constants/app_colors.dart';
 import '../../data/local_cache_service.dart';
@@ -21,9 +22,19 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> {
   final LocalCacheService _cacheService = LocalCacheService();
   String? _localMediaPath;
 
+  // ✅ ADDED: Video Player Controller
+  VideoPlayerController? _videoController;
+
   @override
   void initState() {
     super.initState();
+  }
+
+  // ✅ ADDED: Prevent memory leaks when closing screen
+  @override
+  void dispose() {
+    _videoController?.dispose();
+    super.dispose();
   }
 
   Future<void> _fireAnalyticsEvent(String itemId, String eventType) async {
@@ -51,6 +62,26 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> {
     }
   }
 
+  // ✅ ADDED: Video Initialization Logic
+  Future<void> _initializeVideo(String localPath) async {
+    if (_videoController != null) {
+      await _videoController!.dispose();
+      _videoController = null;
+    }
+
+    final file = File(localPath.replaceAll('file://', ''));
+    _videoController = VideoPlayerController.file(file);
+
+    await _videoController!.initialize();
+    _videoController!.setLooping(true);
+    _videoController!.setVolume(0.0); // Muted by default so it doesn't blast audio
+    _videoController!.play();
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   /// Resolves the URL: returns the local file path if cached, otherwise the network URL.
   Future<void> _resolveMediaPath(String mediaUrl) async {
     setState(() => _localMediaPath = null);
@@ -58,6 +89,11 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> {
       String localPath = await _cacheService.getCachedMediaPath(mediaUrl);
       if (mounted) {
         setState(() => _localMediaPath = 'file://$localPath');
+
+        // ✅ ADDED: Check if we need to initialize a video after downloading
+        if (_selectedItem?.mediaType == 'video' || localPath.toLowerCase().endsWith('.mp4')) {
+          await _initializeVideo('file://$localPath');
+        }
       }
     } catch (e) {
       debugPrint("Falling back to network URL: $e");
@@ -309,12 +345,30 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> {
     );
   }
 
-  /// Safely fallback to images instead of 3D Models
+  /// ✅ ADDED: Video playback support alongside image fallback
   Widget _buildMediaViewer() {
     if (_localMediaPath == null || _localMediaPath!.isEmpty) {
       return const Center(child: Icon(Icons.image_not_supported, color: Colors.white24, size: 100));
     }
 
+    bool isVideo = _selectedItem?.mediaType == 'video' || _localMediaPath!.toLowerCase().endsWith('.mp4');
+
+    if (isVideo) {
+      if (_videoController != null && _videoController!.value.isInitialized) {
+        return FittedBox(
+          fit: BoxFit.contain,
+          child: SizedBox(
+            width: _videoController!.value.size.width,
+            height: _videoController!.value.size.height,
+            child: VideoPlayer(_videoController!),
+          ),
+        );
+      } else {
+        return const Center(child: CircularProgressIndicator(color: Colors.white));
+      }
+    }
+
+    // Existing Image Logic
     if (_localMediaPath!.startsWith('file://')) {
       final file = File(_localMediaPath!.replaceAll('file://', ''));
       if (!file.existsSync()) {
