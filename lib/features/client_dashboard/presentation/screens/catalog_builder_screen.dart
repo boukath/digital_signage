@@ -7,8 +7,6 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../features/auth/data/auth_service.dart';
 import '../../domain/catalog_item.dart';
 
-// REMOVED: import 'package:model_viewer_plus/model_viewer_plus.dart';
-
 class CatalogBuilderScreen extends StatefulWidget {
   const CatalogBuilderScreen({Key? key}) : super(key: key);
 
@@ -21,12 +19,9 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   String? _currentClientId;
-
-  // Form State
   CatalogItem? _selectedItem;
   final _formKey = GlobalKey<FormState>();
 
-  // Controllers
   final _titleController = TextEditingController();
   final _descController = TextEditingController();
   final _categoryController = TextEditingController();
@@ -46,11 +41,7 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
 
   Future<void> _fetchClientId() async {
     final appUser = await _authService.userStateStream.first;
-    if (mounted) {
-      setState(() {
-        _currentClientId = appUser?.uid;
-      });
-    }
+    if (mounted) setState(() => _currentClientId = appUser?.uid);
   }
 
   void _clearForm() {
@@ -138,11 +129,10 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
     );
   }
 
+  // ✅ WINDOWS SDK FIX: Replaced buggy runTransaction with standard get() and update()
   Future<void> _saveCatalogItem() async {
     if (!_formKey.currentState!.validate() || _selectedMediaUrl.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Title and Media are required."), backgroundColor: Colors.redAccent)
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Title and Media are required."), backgroundColor: Colors.redAccent));
       return;
     }
 
@@ -161,17 +151,40 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
       'mediaType': _selectedMediaType,
       'inStock': _inStock,
       'qrActionUrl': _qrController.text.trim(),
-      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedAt': DateTime.now().toIso8601String(),
     };
 
     try {
+      final docRef = _firestore.collection('clients').doc(_currentClientId);
+
+      // 1. Fetch document normally
+      final snapshot = await docRef.get();
+      if (!snapshot.exists) throw Exception("Client document missing!");
+
+      final data = snapshot.data() as Map<String, dynamic>;
+      List<dynamic> currentCatalog = data['catalog'] ?? [];
+
+      // 2. Modify array locally
       if (_selectedItem == null) {
+        itemData['id'] = _firestore.collection('dummy').doc().id;
         itemData['viewCount'] = 0;
         itemData['qrScanCount'] = 0;
-        await _firestore.collection('clients').doc(_currentClientId).collection('catalog_items').add(itemData);
+        currentCatalog.add(itemData);
       } else {
-        await _firestore.collection('clients').doc(_currentClientId).collection('catalog_items').doc(_selectedItem!.id).update(itemData);
+        itemData['id'] = _selectedItem!.id;
+        itemData['viewCount'] = _selectedItem!.viewCount;
+        itemData['qrScanCount'] = _selectedItem!.qrScanCount;
+
+        int index = currentCatalog.indexWhere((item) => item['id'] == _selectedItem!.id);
+        if (index != -1) {
+          currentCatalog[index] = itemData;
+        } else {
+          currentCatalog.add(itemData);
+        }
       }
+
+      // 3. Update document normally
+      await docRef.update({'catalog': currentCatalog});
 
       _clearForm();
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Product Saved!"), backgroundColor: Colors.green));
@@ -182,9 +195,30 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
     setState(() => _isSaving = false);
   }
 
+  // ✅ WINDOWS SDK FIX: Replaced buggy runTransaction with standard get() and update()
   Future<void> _deleteItem(String id) async {
-    await _firestore.collection('clients').doc(_currentClientId).collection('catalog_items').doc(id).delete();
-    if (_selectedItem?.id == id) _clearForm();
+    try {
+      final docRef = _firestore.collection('clients').doc(_currentClientId);
+
+      // 1. Fetch document normally
+      final snapshot = await docRef.get();
+      if (!snapshot.exists) return;
+
+      final data = snapshot.data() as Map<String, dynamic>;
+      List<dynamic> currentCatalog = data['catalog'] ?? [];
+
+      // 2. Modify array locally
+      currentCatalog.removeWhere((item) => item['id'] == id);
+
+      // 3. Update document normally
+      await docRef.update({'catalog': currentCatalog});
+
+      if (_selectedItem?.id == id) _clearForm();
+
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Product Deleted"), backgroundColor: Colors.orange));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Delete Error: $e"), backgroundColor: Colors.redAccent));
+    }
   }
 
   @override
@@ -239,18 +273,28 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
   Widget _buildProductList() {
     if (_currentClientId == null) return const Center(child: CircularProgressIndicator());
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: _firestore.collection('clients').doc(_currentClientId).collection('catalog_items').orderBy('category').snapshots(),
+    return StreamBuilder<DocumentSnapshot>(
+      stream: _firestore.collection('clients').doc(_currentClientId).snapshots(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        if (!snapshot.hasData || !snapshot.data!.exists) {
+          return const Center(child: CircularProgressIndicator());
+        }
 
-        final docs = snapshot.data!.docs;
-        if (docs.isEmpty) return Center(child: Text("No products yet.", style: GoogleFonts.poppins(color: Colors.white54)));
+        final data = snapshot.data!.data() as Map<String, dynamic>;
+        final List<dynamic> rawCatalog = data['catalog'] ?? [];
+
+        final List<CatalogItem> catalogItems = rawCatalog.map((json) {
+          return CatalogItem.fromMap(json as Map<String, dynamic>);
+        }).toList();
+
+        catalogItems.sort((a, b) => a.category.compareTo(b.category));
+
+        if (catalogItems.isEmpty) return Center(child: Text("No products yet.", style: GoogleFonts.poppins(color: Colors.white54)));
 
         return ListView.builder(
-          itemCount: docs.length,
+          itemCount: catalogItems.length,
           itemBuilder: (context, index) {
-            final item = CatalogItem.fromMap(docs[index].data() as Map<String, dynamic>, docs[index].id);
+            final item = catalogItems[index];
 
             return ListTile(
               leading: CircleAvatar(
@@ -335,7 +379,7 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
                               Text("3D Model Selected", style: TextStyle(color: Colors.white54, fontSize: 10)),
                             ],
                           ),
-                        ) // FIXED: Removed ModelViewer usage
+                        )
                             : (_selectedMediaType == 'video' ? const Center(child: Icon(Icons.play_circle_fill, color: Colors.white, size: 50)) : null)),
                       ),
                     ),

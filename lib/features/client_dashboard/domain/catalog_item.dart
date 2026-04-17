@@ -12,9 +12,9 @@ class CatalogItem {
   final bool inStock;
   final String qrActionUrl;
 
-  // NEW: Analytics Tracking Counters!
-  final int viewCount;    // How many times a customer tapped this item
-  final int qrScanCount;  // How many times they clicked/scanned the QR code
+  // Analytics Tracking Counters!
+  final int viewCount;
+  final int qrScanCount;
 
   CatalogItem({
     required this.id,
@@ -33,7 +33,7 @@ class CatalogItem {
 
   Map<String, dynamic> toMap() {
     return {
-      'id': id,
+      'id': id, // The ID is saved directly inside the map for Option B
       'title': title,
       'description': description,
       'category': category,
@@ -43,17 +43,17 @@ class CatalogItem {
       'mediaType': mediaType,
       'inStock': inStock,
       'qrActionUrl': qrActionUrl,
-      // We only include these when creating.
-      // When updating via Kiosk, we use FieldValue.increment()
       'viewCount': viewCount,
       'qrScanCount': qrScanCount,
       'updatedAt': DateTime.now().toIso8601String(),
     };
   }
 
-  factory CatalogItem.fromMap(Map<String, dynamic> map, String documentId) {
+  // ✅ OPTION B FIX: Removed "String documentId" from the parameters.
+  // Because it's an array, it doesn't have a Document ID. It pulls 'id' from the map.
+  factory CatalogItem.fromMap(Map<String, dynamic> map) {
     return CatalogItem(
-      id: documentId,
+      id: map['id'] ?? '', // 👈 Pulls the ID directly from the array map
       title: map['title'] ?? '',
       description: map['description'] ?? '',
       category: map['category'] ?? 'Uncategorized',
@@ -63,7 +63,6 @@ class CatalogItem {
       mediaType: map['mediaType'] ?? 'image',
       inStock: map['inStock'] ?? true,
       qrActionUrl: map['qrActionUrl'] ?? '',
-      // Default to 0 if the field doesn't exist yet
       viewCount: map['viewCount'] ?? 0,
       qrScanCount: map['qrScanCount'] ?? 0,
     );

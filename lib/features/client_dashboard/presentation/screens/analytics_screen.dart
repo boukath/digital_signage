@@ -30,24 +30,27 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     if (mounted) setState(() => _currentClientId = appUser?.uid);
   }
 
-  // Temporary function to inject test data
+  // ✅ WINDOWS SDK FIX: Replaced buggy runTransaction with standard get() and update()
   Future<void> _injectTestData() async {
     if (_currentClientId == null) return;
 
-    // Grab all catalog items
-    final snapshot = await _firestore
-        .collection('clients')
-        .doc(_currentClientId)
-        .collection('catalog_items')
-        .get();
+    final docRef = _firestore.collection('clients').doc(_currentClientId);
 
-    // Loop through and update them with fake analytics numbers!
-    for (var doc in snapshot.docs) {
-      await doc.reference.update({
-        'viewCount': 150, // Sets all to 150 views
-        'qrScanCount': 12, // Sets all to 12 scans
-      });
+    // 1. Fetch document normally
+    final snapshot = await docRef.get();
+    if (!snapshot.exists) return;
+
+    final data = snapshot.data() as Map<String, dynamic>;
+    List<dynamic> catalog = data['catalog'] ?? [];
+
+    // 2. Modify array locally
+    for (var item in catalog) {
+      item['viewCount'] = 150;
+      item['qrScanCount'] = 12;
     }
+
+    // 3. Update document normally
+    await docRef.update({'catalog': catalog});
 
     print("TEST DATA INJECTED!");
   }
@@ -66,31 +69,33 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
           const SizedBox(height: 32),
 
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              // Order by viewCount descending to create a leaderboard automatically
-              stream: _firestore.collection('clients').doc(_currentClientId).collection('catalog_items')
-                  .orderBy('viewCount', descending: true)
-                  .snapshots(),
+            child: StreamBuilder<DocumentSnapshot>(
+              stream: _firestore.collection('clients').doc(_currentClientId).snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
                 if (snapshot.hasError) return Center(child: Text("Error loading analytics.", style: GoogleFonts.poppins(color: Colors.redAccent)));
+                if (!snapshot.hasData || !snapshot.data!.exists) return Center(child: Text("No catalog items to track yet.", style: GoogleFonts.poppins(color: Colors.white54)));
 
-                final docs = snapshot.data?.docs ?? [];
-                if (docs.isEmpty) {
+                final data = snapshot.data!.data() as Map<String, dynamic>;
+                final List<dynamic> rawCatalog = data['catalog'] ?? [];
+
+                if (rawCatalog.isEmpty) {
                   return Center(child: Text("No catalog items to track yet.", style: GoogleFonts.poppins(color: Colors.white54)));
                 }
 
-                // Parse items and calculate total metrics
-                final items = docs.map((doc) => CatalogItem.fromMap(doc.data() as Map<String, dynamic>, doc.id)).toList();
+                final List<CatalogItem> items = rawCatalog.map<CatalogItem>((json) {
+                  return CatalogItem.fromMap(json as Map<String, dynamic>);
+                }).toList();
+
+                items.sort((a, b) => b.viewCount.compareTo(a.viewCount));
 
                 int totalViews = 0;
                 int totalScans = 0;
                 for (var item in items) {
-                  totalViews += item.viewCount;
-                  totalScans += item.qrScanCount;
+                  totalViews += item.viewCount.toInt();
+                  totalScans += item.qrScanCount.toInt();
                 }
 
-                // Get the top performer for the progress bar relative sizing
                 final highestViews = items.first.viewCount > 0 ? items.first.viewCount : 1;
 
                 return Column(
@@ -119,28 +124,22 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                           itemCount: items.length,
                           itemBuilder: (context, index) {
                             final item = items[index];
-                            // Calculate percentage for the visual progress bar
                             final double percentage = item.viewCount / highestViews;
 
                             return Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                               child: Row(
                                 children: [
-                                  // Rank number
                                   SizedBox(
                                     width: 30,
                                     child: Text("#${index + 1}", style: GoogleFonts.poppins(color: index < 3 ? Colors.amberAccent : Colors.white54, fontWeight: FontWeight.bold, fontSize: 16)),
                                   ),
-
-                                  // Thumbnail
                                   CircleAvatar(
                                     backgroundColor: Colors.black45,
                                     backgroundImage: item.mediaType == 'image' ? NetworkImage(item.mediaUrl) : null,
                                     child: item.mediaType == 'video' ? const Icon(Icons.play_arrow, color: Colors.white, size: 16) : (item.mediaType == '3d' ? const Icon(Icons.view_in_ar, color: Colors.white, size: 16) : null),
                                   ),
                                   const SizedBox(width: 16),
-
-                                  // Title and Bar
                                   Expanded(
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -153,7 +152,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                             AnimatedContainer(
                                               duration: const Duration(milliseconds: 500),
                                               height: 8,
-                                              // We use FractionallySizedBox to fill the width based on the percentage
                                               width: MediaQuery.of(context).size.width * 0.3 * percentage,
                                               decoration: BoxDecoration(
                                                   gradient: const LinearGradient(colors: [AppColors.backgroundGradientStart, AppColors.backgroundGradientEnd]),
@@ -166,8 +164,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                     ),
                                   ),
                                   const SizedBox(width: 24),
-
-                                  // Exact Numbers
                                   Column(
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
