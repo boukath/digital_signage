@@ -1,7 +1,9 @@
+// File: lib/features/kiosk_player/presentation/screens/interactive_catalog_view.dart
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
-import 'dart:math' as math; // 👈 NEW: For 3D floating math calculations
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -36,7 +38,7 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
   Timer? _idleTimer;
   bool _showUI = true;
 
-  // 👈 NEW: Animation Controller for the 3D Image Float
+  // Animation Controller for the 3D Image Float
   AnimationController? _imageAnimationController;
 
   @override
@@ -54,7 +56,7 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
   @override
   void dispose() {
     _idleTimer?.cancel();
-    _imageAnimationController?.dispose(); // 👈 Clean up
+    _imageAnimationController?.dispose();
     _videoController?.dispose();
     _pageController?.dispose();
     super.dispose();
@@ -182,7 +184,7 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.transparent, // Transparent to let the gradient shine
+      backgroundColor: Colors.transparent,
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -217,12 +219,12 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
               }
 
               return AnimatedSwitcher(
-                duration: const Duration(milliseconds: 600),
+                duration: const Duration(milliseconds: 800),
                 switchInCurve: Curves.easeOutCubic,
                 switchOutCurve: Curves.easeInCubic,
                 child: _selectedCategory == null
                     ? _buildCategoryGrid(groupedItems)
-                    : _buildImmersiveItemView(groupedItems[_selectedCategory]!),
+                    : _buildEditorialItemView(groupedItems[_selectedCategory]!),
               );
             },
           ),
@@ -231,7 +233,7 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     );
   }
 
-  // --- 1. PREMIUM CATEGORY GRID ---
+  // --- 1. PREMIUM CATEGORY GRID (Remains largely the same) ---
   Widget _buildCategoryGrid(Map<String, List<CatalogItem>> groupedItems) {
     final categories = groupedItems.keys.toList();
 
@@ -312,24 +314,22 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     );
   }
 
-  // --- 2. IMMERSIVE FULL-SCREEN ITEM VIEW ---
-  Widget _buildImmersiveItemView(List<CatalogItem> items) {
-    bool isVideo = items[_currentItemIndex].mediaType == 'video' || items[_currentItemIndex].mediaUrl.toLowerCase().endsWith('.mp4');
-
+  // --- 2. THE NEW 60/40 EDITORIAL VIEW ---
+  Widget _buildEditorialItemView(List<CatalogItem> items) {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Swipeable Media Layer
+        // Swipeable Pages containing the 60/40 Row
         PageView.builder(
           controller: _pageController,
           itemCount: items.length,
           onPageChanged: (index) => _onItemChanged(index, items[index]),
           itemBuilder: (context, index) {
-            return _buildSmartMediaViewer(items[index]);
+            return _buildEditorialPage(items[index]);
           },
         ),
 
-        // Floating Back Button (Glassmorphism)
+        // Floating Back Button (Top Left)
         AnimatedOpacity(
           opacity: _showUI ? 1.0 : 0.0,
           duration: const Duration(milliseconds: 500),
@@ -346,16 +346,16 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                       decoration: BoxDecoration(
-                        color: AppColors.glassBackground,
+                        color: Colors.black.withOpacity(0.3),
                         borderRadius: BorderRadius.circular(50),
-                        border: Border.all(color: AppColors.glassBorder, width: 1.0),
+                        border: Border.all(color: Colors.white24, width: 1.0),
                       ),
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Icon(Icons.arrow_back_ios_new, color: AppColors.textPrimary, size: 18),
                           SizedBox(width: 12),
-                          Text("BACK TO COLLECTIONS", style: TextStyle(color: AppColors.textPrimary, fontSize: 14, letterSpacing: 2, fontWeight: FontWeight.bold)),
+                          Text("COLLECTIONS", style: TextStyle(color: AppColors.textPrimary, fontSize: 14, letterSpacing: 2, fontWeight: FontWeight.bold)),
                         ],
                       ),
                     ),
@@ -366,123 +366,149 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
           ),
         ),
 
-        // 🎛️ COMPACT UNIFIED BOTTOM PANEL (Glassmorphism)
-        AnimatedOpacity(
-          opacity: _showUI ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 500),
-          child: Align(
-            alignment: Alignment.bottomCenter,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(24),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-                  child: Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: AppColors.glassBackground,
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(color: AppColors.glassBorder, width: 1.0),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (isVideo) _buildCompactVideoControls(),
-                        if (isVideo) const SizedBox(height: 12),
-
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Expanded(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    items[_currentItemIndex].title,
-                                    style: const TextStyle(color: AppColors.textPrimary, fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 1),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    items[_currentItemIndex].description,
-                                    style: const TextStyle(color: Colors.white70, fontSize: 16, height: 1.4),
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  const SizedBox(height: 16),
-                                  Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                        decoration: BoxDecoration(color: AppColors.textPrimary, borderRadius: BorderRadius.circular(50)),
-                                        child: Text(
-                                          "${items[_currentItemIndex].price.toStringAsFixed(2)} ${items[_currentItemIndex].currency}",
-                                          style: const TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.bold),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 16),
-                                      if (!items[_currentItemIndex].inStock)
-                                        const Text("OUT OF STOCK", style: TextStyle(color: Colors.redAccent, fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 1)),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-
-                            if (items[_currentItemIndex].qrActionUrl.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.only(left: 24),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    GestureDetector(
-                                      onTap: () => _fireAnalyticsEvent(items[_currentItemIndex].id, 'qr_scan'),
-                                      child: Container(
-                                        padding: const EdgeInsets.all(8),
-                                        decoration: BoxDecoration(color: AppColors.textPrimary, borderRadius: BorderRadius.circular(16)),
-                                        child: QrImageView(data: items[_currentItemIndex].qrActionUrl, version: QrVersions.auto, size: 80.0),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    const Text("SCAN TO BUY", style: TextStyle(color: AppColors.textPrimary, fontSize: 12, letterSpacing: 1, fontWeight: FontWeight.bold)),
-                                  ],
-                                ),
-                              )
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-
-        // Thin Pagination Dots Indicator
+        // Thin Pagination Dots Indicator (Right Edge)
         AnimatedOpacity(
           opacity: _showUI ? 1.0 : 0.0,
           duration: const Duration(milliseconds: 500),
           child: Align(
             alignment: Alignment.centerRight,
             child: Padding(
-              padding: const EdgeInsets.only(right: 16.0),
+              padding: const EdgeInsets.only(right: 24.0),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: List.generate(items.length, (index) {
                   return AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
                     margin: const EdgeInsets.symmetric(vertical: 4),
-                    height: _currentItemIndex == index ? 24 : 8,
+                    height: _currentItemIndex == index ? 32 : 8,
                     width: 4,
                     decoration: BoxDecoration(
-                      color: _currentItemIndex == index ? AppColors.textPrimary : AppColors.textPrimary.withOpacity(0.3),
+                      color: _currentItemIndex == index ? AppColors.textPrimary : AppColors.textPrimary.withOpacity(0.2),
                       borderRadius: BorderRadius.circular(10),
                     ),
                   );
                 }),
               ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // --- 3. THE 60/40 PAGE LAYOUT ---
+  Widget _buildEditorialPage(CatalogItem item) {
+    bool isVideo = item.mediaType == 'video' || item.mediaUrl.toLowerCase().endsWith('.mp4');
+
+    return Row(
+      children: [
+        // LEFT 60%: Immersive Media Art Gallery
+        Expanded(
+          flex: 6,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _buildSmartMediaViewer(item),
+
+              // Subtle gradient shadow blending into the dark text panel
+              Align(
+                alignment: Alignment.centerRight,
+                child: Container(
+                  width: 80,
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Colors.transparent, Color(0xFF0A0A0A)],
+                      begin: Alignment.centerLeft,
+                      end: Alignment.centerRight,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // RIGHT 40%: The Editorial Typography Column
+        Expanded(
+          flex: 4,
+          child: Container(
+            color: const Color(0xFF0A0A0A), // Extremely deep, luxurious dark grey/black
+            padding: const EdgeInsets.fromLTRB(48, 80, 80, 80),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Category Tag
+                Text(
+                  item.category.toUpperCase(),
+                  style: const TextStyle(color: Colors.white54, fontSize: 16, fontWeight: FontWeight.w600, letterSpacing: 4),
+                ),
+                const SizedBox(height: 16),
+
+                // Massive Artistic Title
+                Text(
+                  item.title,
+                  style: const TextStyle(color: AppColors.textPrimary, fontSize: 56, fontWeight: FontWeight.bold, height: 1.1, letterSpacing: -1),
+                ),
+                const SizedBox(height: 24),
+
+                // Elegant Price
+                Text(
+                  "${item.price.toStringAsFixed(2)} ${item.currency}",
+                  style: const TextStyle(color: Colors.white70, fontSize: 28, fontWeight: FontWeight.w300, letterSpacing: 1),
+                ),
+
+                if (!item.inStock) ...[
+                  const SizedBox(height: 12),
+                  const Text("CURRENTLY OUT OF STOCK", style: TextStyle(color: Colors.redAccent, fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 2)),
+                ],
+
+                const SizedBox(height: 48),
+
+                // Clean Description Line
+                Text(
+                  item.description,
+                  style: const TextStyle(color: Colors.white54, fontSize: 18, height: 1.6),
+                ),
+
+                const Spacer(), // Pushes the rest to the bottom
+
+                // Video Controls injected elegantly into the text column
+                if (isVideo) ...[
+                  _buildCompactVideoControls(),
+                  const SizedBox(height: 48),
+                ],
+
+                // Isolated QR Code Section at the bottom
+                if (item.qrActionUrl.isNotEmpty)
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      GestureDetector(
+                        onTap: () => _fireAnalyticsEvent(item.id, 'qr_scan'),
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8)
+                          ),
+                          child: QrImageView(data: item.qrActionUrl, version: QrVersions.auto, size: 100.0),
+                        ),
+                      ),
+                      const SizedBox(width: 24),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text("DISCOVER MORE", style: TextStyle(color: AppColors.textPrimary, fontSize: 14, letterSpacing: 2, fontWeight: FontWeight.bold)),
+                            SizedBox(height: 8),
+                            Text("Scan this code with your phone camera to view full specifications or purchase instantly.", style: TextStyle(color: Colors.white54, fontSize: 14, height: 1.5)),
+                          ],
+                        ),
+                      )
+                    ],
+                  )
+              ],
             ),
           ),
         ),
@@ -503,44 +529,54 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
         double maxVal = duration.inMilliseconds > 0 ? duration.inMilliseconds.toDouble() : 1.0;
         double currentVal = position.inMilliseconds.toDouble().clamp(0.0, maxVal);
 
-        return Row(
-          mainAxisSize: MainAxisSize.max,
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            IconButton(
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              icon: Icon(value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_fill, color: AppColors.textPrimary, size: 36),
-              onPressed: () {
-                _userInteracted();
-                value.isPlaying ? _videoController!.pause() : _videoController!.play();
-              },
-            ),
-            const SizedBox(width: 16),
-            Text(_formatDuration(position), style: const TextStyle(color: AppColors.textPrimary, fontSize: 12, fontWeight: FontWeight.bold)),
-
-            Expanded(
-              child: SliderTheme(
-                data: SliderThemeData(
-                  activeTrackColor: AppColors.textPrimary,
-                  inactiveTrackColor: AppColors.textPrimary.withOpacity(0.2),
-                  thumbColor: AppColors.textPrimary,
-                  trackHeight: 3.0,
-                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6.0),
-                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 14.0),
-                ),
-                child: Slider(
-                  value: currentVal,
-                  min: 0.0,
-                  max: maxVal,
-                  onChanged: (newValue) {
+            Row(
+              mainAxisSize: MainAxisSize.max,
+              children: [
+                GestureDetector(
+                  onTap: () {
                     _userInteracted();
-                    _videoController!.seekTo(Duration(milliseconds: newValue.toInt()));
+                    value.isPlaying ? _videoController!.pause() : _videoController!.play();
                   },
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white24)
+                    ),
+                    child: Icon(value.isPlaying ? Icons.pause : Icons.play_arrow, color: AppColors.textPrimary, size: 24),
+                  ),
                 ),
-              ),
-            ),
+                const SizedBox(width: 24),
+                Text(_formatDuration(position), style: const TextStyle(color: AppColors.textPrimary, fontSize: 14, fontWeight: FontWeight.bold)),
 
-            Text(_formatDuration(duration), style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold)),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderThemeData(
+                      activeTrackColor: AppColors.textPrimary,
+                      inactiveTrackColor: AppColors.textPrimary.withOpacity(0.1),
+                      thumbColor: AppColors.textPrimary,
+                      trackHeight: 2.0,
+                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5.0),
+                      overlayShape: const RoundSliderOverlayShape(overlayRadius: 14.0),
+                    ),
+                    child: Slider(
+                      value: currentVal,
+                      min: 0.0,
+                      max: maxVal,
+                      onChanged: (newValue) {
+                        _userInteracted();
+                        _videoController!.seekTo(Duration(milliseconds: newValue.toInt()));
+                      },
+                    ),
+                  ),
+                ),
+
+                Text(_formatDuration(duration), style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
+              ],
+            ),
           ],
         );
       },
@@ -575,8 +611,8 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
               ),
             ),
             BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 50.0, sigmaY: 50.0),
-              child: Container(color: Colors.black.withOpacity(0.5)),
+              filter: ImageFilter.blur(sigmaX: 80.0, sigmaY: 80.0),
+              child: Container(color: Colors.black.withOpacity(0.6)),
             ),
             FittedBox(
               fit: BoxFit.contain,
@@ -600,7 +636,7 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
       imageProvider = NetworkImage(_localMediaPath!);
     }
 
-    // 🌟 NEW: Premium 3D Gallery Suspension for Images 🌟
+    // 🌟 3D Gallery Suspension for Images (Padding fixed for 60/40 layout) 🌟
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -608,7 +644,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
         AnimatedBuilder(
           animation: _imageAnimationController!,
           builder: (context, child) {
-            // Very slowly pulses the background blur to make it feel alive
             final scale = 1.0 + (_imageAnimationController!.value * 0.05);
             return Transform.scale(scale: scale, child: child);
           },
@@ -617,8 +652,8 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
             children: [
               Image(image: imageProvider, fit: BoxFit.cover),
               BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 50.0, sigmaY: 50.0),
-                child: Container(color: Colors.black.withOpacity(0.5)),
+                filter: ImageFilter.blur(sigmaX: 80.0, sigmaY: 80.0),
+                child: Container(color: Colors.black.withOpacity(0.6)),
               ),
             ],
           ),
@@ -628,21 +663,21 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
         AnimatedBuilder(
           animation: _imageAnimationController!,
           builder: (context, child) {
-            // Creates a smooth, organic sine wave from -1.0 to 1.0
             final double wave = math.sin(_imageAnimationController!.value * math.pi);
             final double cosWave = math.cos(_imageAnimationController!.value * math.pi);
 
             return Transform(
               alignment: Alignment.center,
               transform: Matrix4.identity()
-                ..setEntry(3, 2, 0.001) // Add 3D Perspective
-                ..rotateX(wave * 0.015) // Gentle vertical tilt
-                ..rotateY(cosWave * 0.015) // Gentle horizontal tilt
-                ..translate(0.0, wave * 15.0, 0.0), // Slowly float up and down by 15 pixels
+                ..setEntry(3, 2, 0.001)
+                ..rotateX(wave * 0.015)
+                ..rotateY(cosWave * 0.015)
+                ..translate(0.0, wave * 15.0, 0.0),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(48, 48, 48, 180), // Keep it clear of the bottom UI panel
+                // Notice the padding here is now perfectly centered for the 60% window!
+                padding: const EdgeInsets.all(64.0),
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16), // Premium rounded art gallery corners
+                  borderRadius: BorderRadius.circular(16),
                   child: Image(
                     image: imageProvider,
                     fit: BoxFit.contain,
