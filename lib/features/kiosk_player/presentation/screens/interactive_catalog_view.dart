@@ -135,7 +135,10 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     _videoController = VideoPlayerController.file(file);
     await _videoController!.initialize();
     _videoController!.setLooping(true);
-    _videoController!.setVolume(0.0);
+
+    // 👇 FIXED: SET VOLUME TO 1.0 SO IT PLAYS SOUND BY DEFAULT
+    _videoController!.setVolume(1.0);
+
     _videoController!.play();
     if (mounted) setState(() {});
   }
@@ -807,6 +810,27 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                     child: Icon(value.isPlaying ? Icons.pause : Icons.play_arrow, color: AppColors.textPrimary, size: 24),
                   ),
                 ),
+                const SizedBox(width: 12), // 👈 Adjusted spacing
+
+                // 👇 VOLUME TOGGLE BUTTON
+                GestureDetector(
+                  onTap: () {
+                    _userInteracted();
+                    // If volume is 0.0 (muted), turn it up to 1.0. If not, mute it.
+                    bool isMuted = value.volume == 0.0;
+                    _videoController!.setVolume(isMuted ? 1.0 : 0.0);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.white24)),
+                    child: Icon(
+                        value.volume == 0.0 ? Icons.volume_off : Icons.volume_up,
+                        color: AppColors.textPrimary,
+                        size: 24
+                    ),
+                  ),
+                ),
+
                 const SizedBox(width: 24),
                 Text(_formatDuration(position), style: const TextStyle(color: AppColors.textPrimary, fontSize: 14, fontWeight: FontWeight.bold)),
 

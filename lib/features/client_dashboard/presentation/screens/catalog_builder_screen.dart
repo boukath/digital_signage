@@ -31,7 +31,7 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
 
   final _titleController = TextEditingController();
   final _descController = TextEditingController();
-  final _departmentController = TextEditingController(); // 👈 NEW: Top-level hierarchy
+  final _departmentController = TextEditingController();
   final _categoryController = TextEditingController();
   final _priceController = TextEditingController();
   final _qrController = TextEditingController();
@@ -50,7 +50,6 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
 
   @override
   void dispose() {
-    // 🧹 PRO FIX: Dispose controllers to prevent memory leaks
     _titleController.dispose();
     _descController.dispose();
     _departmentController.dispose();
@@ -70,7 +69,7 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
       _selectedItem = null;
       _titleController.clear();
       _descController.clear();
-      _departmentController.clear(); // 👈 Clear it
+      _departmentController.clear();
       _categoryController.clear();
       _priceController.clear();
       _qrController.clear();
@@ -84,7 +83,7 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
       _selectedItem = item;
       _titleController.text = item.title;
       _descController.text = item.description;
-      _departmentController.text = item.department; // 👈 Load it
+      _departmentController.text = item.department;
       _categoryController.text = item.category;
       _priceController.text = item.price > 0 ? item.price.toString() : '';
       _qrController.text = item.qrActionUrl;
@@ -100,7 +99,6 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
     });
   }
 
-  // 🚀 UPGRADED: Dynamic File Picking (Streams for Native, Bytes for Web)
   Future<void> _uploadDirectMedia(Function setDialogState, List<Map<String, dynamic>> tempGallery) async {
     if (_currentClientId == null) return;
 
@@ -164,11 +162,13 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
         }
 
         if (downloadUrl != null) {
+          // 🌟 ADDED: Assign 'folderPath: ""' initially so it is ready to be organized
           await _firestore.collection('clients').doc(_currentClientId).collection('media').add({
             'url': downloadUrl,
             'name': fileName,
             'type': fileType,
             'thumbnailUrl': autoThumbnailUrl,
+            'folderPath': "",
             'uploadedAt': FieldValue.serverTimestamp(),
           });
 
@@ -376,7 +376,7 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
     final Map<String, dynamic> itemData = {
       'title': _titleController.text.trim(),
       'description': _descController.text.trim(),
-      'department': _departmentController.text.trim().isEmpty ? 'General' : _departmentController.text.trim(), // 👈 NEW
+      'department': _departmentController.text.trim().isEmpty ? 'General' : _departmentController.text.trim(),
       'category': _categoryController.text.trim().isEmpty ? 'Uncategorized' : _categoryController.text.trim(),
       'price': parsedPrice,
       'currency': 'DZD',
@@ -418,8 +418,38 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
 
       await docRef.update({'catalog': currentCatalog});
 
+      // ==========================================================
+      // 🌟 MAGIC AUTO-FOLDER CREATOR 🌟
+      // Extracts Department and Title, creates the folder, and moves files into it!
+      // ==========================================================
+      String dept = itemData['department'];
+      String title = itemData['title'];
+      String targetFolder = "$dept/$title"; // e.g. "MEN/Sneakers"
+
+      // 1. Create the folders in the virtual file system
+      await docRef.set({
+        'mediaFolders': FieldValue.arrayUnion([dept, targetFolder])
+      }, SetOptions(merge: true));
+
+      // 2. Gather all the URLs that belong to this product
+      List<String> productUrls = [];
+      for (var g in _selectedGallery) {
+        if (g['url'] != null) productUrls.add(g['url']);
+      }
+
+      // 3. Update the media documents so they appear inside the new folder!
+      if (productUrls.isNotEmpty) {
+        final mediaSnapshot = await docRef.collection('media').get();
+        for (var doc in mediaSnapshot.docs) {
+          final docData = doc.data();
+          if (productUrls.contains(docData['url'])) {
+            await doc.reference.update({'folderPath': targetFolder});
+          }
+        }
+      }
+
       _clearForm();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Product Saved!"), backgroundColor: Colors.green));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Product Saved & Auto-Organized!"), backgroundColor: Colors.green));
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.redAccent));
     }
