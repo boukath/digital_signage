@@ -215,6 +215,14 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
 
             final data = snapshot.data!.data() as Map<String, dynamic>;
             final List<dynamic> rawCatalog = data['catalog'] ?? [];
+            final List<dynamic> rawDepartments = data['departments'] ?? []; // 👈 NEW
+
+            // 👈 NEW: Map Department Name -> Background Image URL
+            final Map<String, String> departmentBackgrounds = {};
+            for (var dept in rawDepartments) {
+              departmentBackgrounds[dept['name']] = dept['imageUrl'] ?? '';
+            }
+
             final List<CatalogItem> catalogItems = rawCatalog.map((json) => CatalogItem.fromMap(json as Map<String, dynamic>)).toList();
 
             if (catalogItems.isEmpty) {
@@ -233,7 +241,8 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
               switchInCurve: Curves.easeOutCubic,
               switchOutCurve: Curves.easeInCubic,
               child: _selectedDepartment == null
-                  ? _buildLevel1Lookbook(groupedByDept)
+              // 👇 Pass the new backgrounds map here
+                  ? _buildLevel1Lookbook(groupedByDept, departmentBackgrounds)
                   : (_selectedProduct == null
                   ? _buildLevel2Aisle(groupedByDept[_selectedDepartment]!)
                   : _buildLevel3FittingRoom(_selectedProduct!)),
@@ -247,7 +256,9 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
   // =========================================================================
   // LEVEL 1: THE LOOKBOOK (Vertical Parallax Carousel)
   // =========================================================================
-  Widget _buildLevel1Lookbook(Map<String, List<CatalogItem>> groupedByDept) {
+
+  // 👇 Added the map to the parameters here
+  Widget _buildLevel1Lookbook(Map<String, List<CatalogItem>> groupedByDept, Map<String, String> departmentBackgrounds) {
     final departments = groupedByDept.keys.toList();
 
     return Stack(
@@ -259,9 +270,17 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
           itemBuilder: (context, index) {
             final deptName = departments[index];
             final deptItems = groupedByDept[deptName]!;
-            // Use the first item's image as the Hero cover
+
+            // Use the first item's image as the Fallback Hero cover
             final previewItem = deptItems.first;
-            final bgUrl = previewItem.mediaType == 'image' ? previewItem.mediaUrl : previewItem.thumbnailUrl;
+
+            // 🌟 THE MAGIC HAPPENS HERE 🌟
+            // Try to get the dedicated cover. If it doesn't exist, fallback to the old product image!
+            final String defaultBg = previewItem.mediaType == 'image' ? previewItem.mediaUrl : previewItem.thumbnailUrl;
+
+            final String bgUrl = departmentBackgrounds[deptName]?.isNotEmpty == true
+                ? departmentBackgrounds[deptName]!
+                : defaultBg;
 
             return GestureDetector(
               onTap: () => _openDepartment(deptName),

@@ -1,3 +1,4 @@
+import 'dart:ui'; // 👇 Needed for PointerDeviceKind
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -41,6 +42,19 @@ void main() async {
   runApp(const MyApp());
 }
 
+// ==========================================
+// 👇 NEW: Custom Scroll Behavior for Desktop
+// ==========================================
+class KioskScrollBehavior extends MaterialScrollBehavior {
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+    PointerDeviceKind.touch,    // Default touch screens
+    PointerDeviceKind.mouse,    // 👈 Forces mouse clicks to act like swiping
+    PointerDeviceKind.stylus,   // Stylus pens
+    PointerDeviceKind.trackpad, // Laptop trackpads
+  };
+}
+
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -49,6 +63,8 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Digital Signage Enterprise',
       debugShowCheckedModeBanner: false,
+      // 👇 NEW: Apply the custom scroll behavior here globally
+      scrollBehavior: KioskScrollBehavior(),
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4A00E0)),
         useMaterial3: true,

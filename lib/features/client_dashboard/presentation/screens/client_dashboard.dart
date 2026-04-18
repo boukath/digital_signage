@@ -5,12 +5,13 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../features/auth/data/auth_service.dart';
 
-// Import all 6 screens
+// Import all 7 screens
 import 'overview_screen.dart';
 import 'media_manager_screen.dart';
 import 'playlist_builder_screen.dart';
 import 'catalog_builder_screen.dart';
-import 'analytics_screen.dart'; // NEW: Analytics Screen imported
+import 'department_manager_screen.dart'; // 👈 NEW: Department Manager Screen imported
+import 'analytics_screen.dart';
 import 'screen_assignment_screen.dart';
 
 /// Documentation:
@@ -28,14 +29,15 @@ class _ClientDashboardState extends State<ClientDashboard> {
   int _selectedIndex = 0;
   final AuthService _authService = AuthService();
 
-  // Exactly 6 Pages in the correct order
+  // Exactly 7 Pages in the correct order
   late final List<Widget> _pages = [
     const OverviewScreen(),           // Index 0
     const MediaManagerScreen(),       // Index 1
     const PlaylistBuilderScreen(),    // Index 2 (Screensaver)
     const CatalogBuilderScreen(),     // Index 3 (Catalog)
-    const AnalyticsScreen(),          // Index 4 (Analytics)
-    const ScreenAssignmentScreen(),   // Index 5 (Screens)
+    const DepartmentManagerScreen(),  // Index 4 (Departments) 👈 NEW
+    const AnalyticsScreen(),          // Index 5 (Analytics)
+    const ScreenAssignmentScreen(),   // Index 6 (Screens)
   ];
 
   @override
@@ -131,7 +133,7 @@ class _ClientDashboardState extends State<ClientDashboard> {
         unselectedLabelTextStyle: GoogleFonts.poppins(color: Colors.white54),
         labelType: NavigationRailLabelType.all,
 
-        // Exactly 6 Destinations (Matching the _pages list perfectly)
+        // Exactly 7 Destinations (Matching the _pages list perfectly)
         destinations: const [
           NavigationRailDestination(
             icon: Icon(Icons.dashboard_outlined),
@@ -154,14 +156,19 @@ class _ClientDashboardState extends State<ClientDashboard> {
             label: Text('Catalog'), // Index 3
           ),
           NavigationRailDestination(
+            icon: Icon(Icons.category_outlined),
+            selectedIcon: Icon(Icons.category),
+            label: Text('Departments'), // Index 4 👈 NEW BUTTON
+          ),
+          NavigationRailDestination(
             icon: Icon(Icons.bar_chart_outlined),
             selectedIcon: Icon(Icons.bar_chart),
-            label: Text('Analytics'), // Index 4 (NEW)
+            label: Text('Analytics'), // Index 5
           ),
           NavigationRailDestination(
             icon: Icon(Icons.tv_outlined),
             selectedIcon: Icon(Icons.tv),
-            label: Text('Screens'), // Index 5
+            label: Text('Screens'), // Index 6
           ),
         ],
       ),
