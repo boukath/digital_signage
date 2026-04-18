@@ -1,5 +1,8 @@
 // File: lib/features/client_dashboard/presentation/screens/catalog_builder_screen.dart
 
+import 'dart:typed_data'; // 👈 NEW: Fixes the Uint8List compiler error
+import 'package:flutter/foundation.dart' show kIsWeb; // 👈 NEW: Required for the Web safeguard
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -8,8 +11,7 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../features/auth/data/auth_service.dart';
 import '../../domain/catalog_item.dart';
 import '../../data/b2_storage_service.dart';
-import 'package:video_thumbnail/video_thumbnail.dart'; // 👈 NEW IMPORT
-
+import '../../../../core/utils/thumbnail_router.dart';
 class CatalogBuilderScreen extends StatefulWidget {
   const CatalogBuilderScreen({Key? key}) : super(key: key);
 
@@ -82,14 +84,15 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
     });
   }
 
-  // 🚀 UPGRADED: Direct Upload with MAGIC AUTO-THUMBNAIL EXTRACTION
+  // 🚀 UPGRADED: Dynamic File Picking (Streams for Native, Bytes for Web)
   Future<void> _uploadDirectMedia(Function setDialogState, List<Map<String, dynamic>> tempGallery) async {
     if (_currentClientId == null) return;
 
     FilePickerResult? result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['jpg', 'jpeg', 'png', 'mp4', 'glb', 'gltf'],
-      withData: true,
+      withReadStream: !kIsWeb, // 👈 PRO FIX: Only stream on Native!
+      withData: kIsWeb,        // 👈 PRO FIX: Load bytes on Web so we can make the thumbnail!
       allowMultiple: true,
     );
 
@@ -97,60 +100,79 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
       setDialogState(() => _isUploadingMedia = true);
 
       for (var file in result.files) {
-        if (file.bytes == null) continue;
+        // Accept either readStream (Native) or bytes (Web)
+        if (file.readStream == null && file.bytes == null) continue;
+
         final fileName = file.name;
-        final fileBytes = file.bytes!;
+        String fileType = 'image';
+        if (fileName.toLowerCase().endsWith('.mp4')) fileType = 'video';
+        if (fileName.toLowerCase().endsWith('.glb') || fileName.toLowerCase().endsWith('.gltf')) fileType = '3d';
 
-        // 1. Upload original file to B2 Cloud
-        final String? downloadUrl = await _b2Service.uploadMedia(fileName, fileBytes, _currentClientId!);
+        String? downloadUrl;
+        String autoThumbnailUrl = '';
 
-        if (downloadUrl != null) {
-          String fileType = 'image';
-          String autoThumbnailUrl = ''; // Will hold our auto-generated cover!
+        // 🛠️ HELPER: Gets the correct data format depending on the platform
+        Stream<Uint8List> getFileStream() {
+          if (kIsWeb && file.bytes != null) {
+            return Stream.value(file.bytes!); // Web Data
+          } else {
+            return file.readStream!.map((chunk) => Uint8List.fromList(chunk)); // Native Stream
+          }
+        }
 
-          if (fileName.toLowerCase().endsWith('.mp4')) {
-            fileType = 'video';
+        if (fileType == 'video') {
+          print("🎬 Extracting Video Frame...");
 
-            // 🎬 2. MAGIC: Auto-Extract a frame from the video!
-            try {
-              print("🎬 Extracting frame from video...");
-              final uint8list = await VideoThumbnail.thumbnailData(
-                video: downloadUrl,
-                imageFormat: ImageFormat.JPEG,
-                maxWidth: 600, // Optimize size so the dashboard stays fast
-                quality: 75,
-              );
+          // 🚀 This will now successfully receive the bytes on Edge/Chrome!
+          Uint8List? thumbBytes = await AppThumbnailHelper.extract(file);
 
-              if (uint8list != null) {
-                // 3. Upload the extracted frame to B2 as a JPG!
-                String thumbName = 'thumb_${DateTime.now().millisecondsSinceEpoch}.jpg';
-                final String? uploadedThumb = await _b2Service.uploadMedia(thumbName, uint8list, _currentClientId!);
-                if (uploadedThumb != null) {
-                  autoThumbnailUrl = uploadedThumb;
-                  print("✅ Auto-Thumbnail Generated and Uploaded!");
-                }
-              }
-            } catch (e) {
-              print("⚠️ Auto-thumbnail failed, falling back to empty cover: $e");
-            }
-          } else if (fileName.toLowerCase().endsWith('.glb') || fileName.toLowerCase().endsWith('.gltf')) {
-            fileType = '3d';
+          if (thumbBytes != null) print("✅ Thumbnail Extracted Successfully!");
+
+          // Prepare the Video Stream Upload
+          Future<String?> videoUploadTask = _b2Service.uploadMediaStream(
+              fileName,
+              getFileStream(),
+              file.size,
+              _currentClientId!
+          );
+
+          // Prepare the Thumbnail Upload
+          Future<String?> thumbUploadTask = Future.value(null);
+          if (thumbBytes != null) {
+            String thumbName = 'thumb_${DateTime.now().millisecondsSinceEpoch}.jpg';
+            thumbUploadTask = _b2Service.uploadMedia(thumbName, thumbBytes, _currentClientId!);
           }
 
-          // 4. Save metadata to Firestore Media Library
+          // Execute BOTH uploads at the exact same time!
+          final uploadResults = await Future.wait([videoUploadTask, thumbUploadTask]);
+          downloadUrl = uploadResults[0];
+          if (uploadResults[1] != null) autoThumbnailUrl = uploadResults[1]!;
+
+        } else {
+          // IMAGE / 3D LOGIC
+          downloadUrl = await _b2Service.uploadMediaStream(
+              fileName,
+              getFileStream(),
+              file.size,
+              _currentClientId!
+          );
+        }
+
+        // DATABASE SAVING
+        if (downloadUrl != null) {
           await _firestore.collection('clients').doc(_currentClientId).collection('media').add({
             'url': downloadUrl,
             'name': fileName,
             'type': fileType,
+            'thumbnailUrl': autoThumbnailUrl,
             'uploadedAt': FieldValue.serverTimestamp(),
           });
 
-          // 5. Automatically add it to the Cinematic Strip (with the new cover!)
           setDialogState(() {
             tempGallery.add({
               'url': downloadUrl,
               'type': fileType,
-              'thumbnailUrl': autoThumbnailUrl // 👈 Injects the extracted frame!
+              'thumbnailUrl': autoThumbnailUrl
             });
           });
         }
@@ -208,7 +230,18 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
                         final data = docs[index].data() as Map<String, dynamic>;
                         final mediaType = data['type'];
                         final url = data['url'];
+
+                        // 👈 PRO FIX: Read the newly saved thumbnail URL
+                        final thumbUrl = data['thumbnailUrl'] ?? '';
                         final isSelected = tempGallery.any((m) => m['url'] == url);
+
+                        // 🖼️ Determine Background Image
+                        String? bgImage;
+                        if (mediaType == 'image' && url.isNotEmpty) {
+                          bgImage = url;
+                        } else if (thumbUrl.isNotEmpty) {
+                          bgImage = thumbUrl;
+                        }
 
                         return GestureDetector(
                           onTap: () {
@@ -216,7 +249,8 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
                               if (isSelected) {
                                 tempGallery.removeWhere((m) => m['url'] == url);
                               } else {
-                                tempGallery.add({'url': url, 'type': mediaType, 'thumbnailUrl': ''});
+                                // 👈 PRO FIX: Pass the thumbnail URL into the cinematic strip
+                                tempGallery.add({'url': url, 'type': mediaType, 'thumbnailUrl': thumbUrl});
                               }
                             });
                           },
@@ -225,7 +259,11 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
                               color: Colors.black45,
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(color: isSelected ? AppColors.backgroundGradientStart : Colors.white24, width: isSelected ? 4 : 1),
-                              image: mediaType == 'image' ? DecorationImage(image: NetworkImage(url), fit: BoxFit.cover, colorFilter: isSelected ? null : ColorFilter.mode(Colors.black.withOpacity(0.3), BlendMode.darken)) : null,
+                              image: bgImage != null ? DecorationImage(
+                                  image: NetworkImage(bgImage),
+                                  fit: BoxFit.cover,
+                                  colorFilter: isSelected ? null : ColorFilter.mode(Colors.black.withOpacity(0.3), BlendMode.darken)
+                              ) : null,
                             ),
                             child: Stack(
                               children: [
@@ -261,7 +299,6 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
     );
   }
 
-  // 🖼️ NEW: Allows assigning a specific Image from the Media library to act as the cover for a Video
   Future<void> _selectCoverForVideo(int galleryIndex) async {
     await showDialog(
       context: context,
@@ -280,7 +317,6 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
             width: 700,
             height: 450,
             child: StreamBuilder<QuerySnapshot>(
-              // 👈 Notice we filter to ONLY show images for the cover
               stream: _firestore.collection('clients').doc(_currentClientId).collection('media').where('type', isEqualTo: 'image').orderBy('uploadedAt', descending: true).snapshots(),
               builder: (context, snapshot) {
                 if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
@@ -345,7 +381,7 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
       'currency': 'DZD',
       'mediaUrl': primaryMedia['url'],
       'mediaType': primaryMedia['type'],
-      'thumbnailUrl': primaryMedia['thumbnailUrl'] ?? '', // 👈 Saved as primary cover
+      'thumbnailUrl': primaryMedia['thumbnailUrl'] ?? '',
       'gallery': _selectedGallery,
       'inStock': _inStock,
       'qrActionUrl': _qrController.text.trim(),
@@ -487,7 +523,6 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
           itemBuilder: (context, index) {
             final item = catalogItems[index];
 
-            // 👈 Uses the new thumbnailUrl if it's a video!
             String avatarUrl = item.mediaType == 'image' ? item.mediaUrl : item.thumbnailUrl;
 
             return ListTile(
@@ -627,7 +662,6 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
   Widget _buildGalleryThumbnail(Map<String, dynamic> media, int index, {required Key key}) {
     bool isPrimary = index == 0;
 
-    // 📸 Pull the thumbnail URL if it exists
     String? thumbUrl = media['thumbnailUrl'];
     String? bgImage = media['type'] == 'image' ? media['url'] : (thumbUrl != null && thumbUrl.isNotEmpty ? thumbUrl : null);
 
@@ -639,7 +673,6 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
         color: Colors.black45,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: isPrimary ? AppColors.backgroundGradientStart : Colors.white24, width: isPrimary ? 2 : 1),
-        // Render the image or the assigned cover
         image: bgImage != null ? DecorationImage(image: NetworkImage(bgImage), fit: BoxFit.cover, colorFilter: ColorFilter.mode(Colors.black.withOpacity(0.3), BlendMode.darken)) : null,
       ),
       child: Stack(
@@ -650,7 +683,6 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
           if (media['type'] == '3d')
             const Center(child: Icon(Icons.view_in_ar_rounded, color: Colors.white, size: 36)),
 
-          // 🖼️ THE NEW "SET COVER" BUTTON FOR VIDEOS/3D
           if (media['type'] != 'image')
             Positioned(
               top: 4, left: 4,

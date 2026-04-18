@@ -1,11 +1,14 @@
 // File: lib/features/client_dashboard/presentation/screens/media_manager_screen.dart
 
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
+
 import '../../../../core/constants/app_colors.dart';
-import '../../../../features/auth/domain/app_user.dart';
 import '../../../../features/auth/data/auth_service.dart';
 import '../../data/b2_storage_service.dart';
 
@@ -39,38 +42,74 @@ class _MediaManagerScreenState extends State<MediaManagerScreen> {
     }
   }
 
-  /// Documentation:
-  /// Opens the file explorer allowing Images, Videos, AND 3D Spatial Models (.glb)
+  // 🚀 UPGRADED: Local Auto-Thumbnail Extraction & Parallel Streaming
   Future<void> _pickAndUploadFile() async {
     if (_currentClientId == null) return;
 
-    // NEW: We changed this to custom to explicitly allow .glb files!
     FilePickerResult? result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['jpg', 'jpeg', 'png', 'mp4', 'glb', 'gltf'],
-      withData: true,
+      withReadStream: true, // 👈 PRO FIX: Use stream to prevent RAM exhaustion
     );
 
-    if (result != null && result.files.first.bytes != null) {
+    if (result != null && result.files.first.readStream != null) {
       setState(() => _isUploading = true);
 
-      final fileName = result.files.first.name;
-      final fileBytes = result.files.first.bytes!;
+      final file = result.files.first;
+      final fileName = file.name;
 
-      // 1. Upload to B2
-      final String? downloadUrl = await _b2Service.uploadMedia(fileName, fileBytes, _currentClientId!);
+      String fileType = 'image';
+      if (fileName.toLowerCase().endsWith('.mp4')) fileType = 'video';
+      if (fileName.toLowerCase().endsWith('.glb') || fileName.toLowerCase().endsWith('.gltf')) fileType = '3d';
 
-      // 2. Save metadata to Firestore
+      String? downloadUrl;
+      String autoThumbnailUrl = '';
+
+      // --- 🎬 VIDEO LOGIC: Local Extraction & Parallel Upload ---
+      if (fileType == 'video') {
+        Uint8List? thumbBytes;
+
+        // Web Safeguard
+        if (!kIsWeb && file.path != null) {
+          try {
+            thumbBytes = await VideoThumbnail.thumbnailData(
+              video: file.path!,
+              imageFormat: ImageFormat.JPEG,
+              maxWidth: 600,
+              quality: 75,
+            );
+          } catch (e) {
+            print("⚠️ Local extraction failed: $e");
+          }
+        }
+
+        final videoStream = file.readStream!.map((chunk) => Uint8List.fromList(chunk));
+        Future<String?> videoUploadTask = _b2Service.uploadMediaStream(fileName, videoStream, file.size, _currentClientId!);
+
+        Future<String?> thumbUploadTask = Future.value(null);
+        if (thumbBytes != null) {
+          String thumbName = 'thumb_${DateTime.now().millisecondsSinceEpoch}.jpg';
+          thumbUploadTask = _b2Service.uploadMedia(thumbName, thumbBytes, _currentClientId!);
+        }
+
+        final uploadResults = await Future.wait([videoUploadTask, thumbUploadTask]);
+
+        downloadUrl = uploadResults[0];
+        if (uploadResults[1] != null) autoThumbnailUrl = uploadResults[1]!;
+
+      } else {
+        // --- 🖼️ IMAGE / 3D LOGIC ---
+        final fileStream = file.readStream!.map((chunk) => Uint8List.fromList(chunk));
+        downloadUrl = await _b2Service.uploadMediaStream(fileName, fileStream, file.size, _currentClientId!);
+      }
+
+      // --- 💾 DATABASE SAVING ---
       if (downloadUrl != null) {
-        // Determine the file type dynamically
-        String fileType = 'image';
-        if (fileName.toLowerCase().endsWith('.mp4')) fileType = 'video';
-        if (fileName.toLowerCase().endsWith('.glb') || fileName.toLowerCase().endsWith('.gltf')) fileType = '3d';
-
         await _firestore.collection('clients').doc(_currentClientId).collection('media').add({
           'url': downloadUrl,
           'name': fileName,
-          'type': fileType, // Now supports 'image', 'video', or '3d'
+          'type': fileType,
+          'thumbnailUrl': autoThumbnailUrl, // 👈 Saved globally to the database!
           'uploadedAt': FieldValue.serverTimestamp(),
         });
       }
@@ -79,8 +118,8 @@ class _MediaManagerScreenState extends State<MediaManagerScreen> {
     }
   }
 
-  // 🗑️ NEW: Confirmation Dialog before permanent deletion
-  Future<void> _confirmDelete(String docId, String fileName) async {
+  // 🗑️ Confirmation Dialog before permanent deletion
+  Future<void> _confirmDelete(String docId, String fileName, String? thumbnailUrl) async {
     showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -97,7 +136,7 @@ class _MediaManagerScreenState extends State<MediaManagerScreen> {
               style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
               onPressed: () async {
                 Navigator.pop(ctx);
-                await _executeDelete(docId, fileName);
+                await _executeDelete(docId, fileName, thumbnailUrl);
               },
               child: Text("Delete", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
             )
@@ -106,27 +145,27 @@ class _MediaManagerScreenState extends State<MediaManagerScreen> {
     );
   }
 
-  // 🗑️ NEW: The actual deletion logic (Database + Cloud Storage)
-  Future<void> _executeDelete(String docId, String fileName) async {
+  // 🗑️ The actual deletion logic (Database + Cloud Storage)
+  Future<void> _executeDelete(String docId, String fileName, String? thumbnailUrl) async {
     if (_currentClientId == null) return;
 
     try {
-      // 1. Delete from Firestore Database
       await _firestore.collection('clients').doc(_currentClientId).collection('media').doc(docId).delete();
-
-      // 2. Delete the actual heavy file from Backblaze B2
       await _b2Service.deleteMedia(fileName, _currentClientId!);
 
+      // 🧹 PRO FIX: Delete the thumbnail from Backblaze too so we don't waste storage!
+      if (thumbnailUrl != null && thumbnailUrl.isNotEmpty) {
+        final uri = Uri.parse(thumbnailUrl);
+        final thumbName = uri.pathSegments.last;
+        await _b2Service.deleteMedia(thumbName, _currentClientId!);
+      }
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("File permanently deleted."), backgroundColor: Colors.orange)
-        );
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("File permanently deleted."), backgroundColor: Colors.orange));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Error deleting file: $e"), backgroundColor: Colors.redAccent)
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error deleting file: $e"), backgroundColor: Colors.redAccent));
       }
     }
   }
@@ -138,7 +177,6 @@ class _MediaManagerScreenState extends State<MediaManagerScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header Row
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -165,7 +203,6 @@ class _MediaManagerScreenState extends State<MediaManagerScreen> {
           ),
           const SizedBox(height: 24),
 
-          // Real-time Grid of Media using StreamBuilder
           Expanded(
             child: _currentClientId == null
                 ? const Center(child: CircularProgressIndicator(color: Colors.white))
@@ -182,33 +219,39 @@ class _MediaManagerScreenState extends State<MediaManagerScreen> {
 
                 return GridView.builder(
                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 4,
-                      crossAxisSpacing: 16,
-                      mainAxisSpacing: 16
+                      crossAxisCount: 4, crossAxisSpacing: 16, mainAxisSpacing: 16
                   ),
                   itemCount: mediaDocs.length,
                   itemBuilder: (context, index) {
-                    final docId = mediaDocs[index].id; // 👈 NEW: Need document ID for deletion
+                    final docId = mediaDocs[index].id;
                     final data = mediaDocs[index].data() as Map<String, dynamic>;
 
                     final mediaUrl = data['url'] ?? '';
-                    final fileName = data['name'] ?? 'Unknown File'; // 👈 NEW: Need filename for B2 deletion
+                    final thumbUrl = data['thumbnailUrl'] ?? ''; // 👈 Read the new field
+                    final fileName = data['name'] ?? 'Unknown File';
+
                     final isVideo = data['type'] == 'video';
                     final is3D = data['type'] == '3d';
+
+                    // 🖼️ Determine what background image to show
+                    String? bgImage;
+                    if (!isVideo && !is3D && mediaUrl.isNotEmpty) {
+                      bgImage = mediaUrl; // It's a normal image
+                    } else if (thumbUrl.isNotEmpty) {
+                      bgImage = thumbUrl; // It's a video with an extracted thumbnail!
+                    }
 
                     return Stack(
                       fit: StackFit.expand,
                       children: [
-                        // The Media Card
                         Container(
                           decoration: BoxDecoration(
                             color: AppColors.glassBackground,
                             border: Border.all(color: AppColors.glassBorder),
                             borderRadius: BorderRadius.circular(16),
-                            // Only show image preview if it is an actual image
-                            image: (!isVideo && !is3D && mediaUrl.isNotEmpty)
+                            image: bgImage != null
                                 ? DecorationImage(
-                                image: NetworkImage(mediaUrl),
+                                image: NetworkImage(bgImage),
                                 fit: BoxFit.cover,
                                 colorFilter: ColorFilter.mode(Colors.black.withOpacity(0.3), BlendMode.darken)
                             )
@@ -223,12 +266,10 @@ class _MediaManagerScreenState extends State<MediaManagerScreen> {
                           ),
                         ),
 
-                        // 🗑️ NEW: The Red Delete Button
                         Positioned(
-                          top: 8,
-                          right: 8,
+                          top: 8, right: 8,
                           child: GestureDetector(
-                            onTap: () => _confirmDelete(docId, fileName),
+                            onTap: () => _confirmDelete(docId, fileName, thumbUrl),
                             child: Container(
                               padding: const EdgeInsets.all(8),
                               decoration: BoxDecoration(
