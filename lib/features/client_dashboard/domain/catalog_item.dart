@@ -4,14 +4,15 @@ class CatalogItem {
   final String id;
   final String title;
   final String description;
-  final String category;
+  final String department; // 👈 NEW: Top-level grouping (e.g., "MEN", "WOMEN")
+  final String category;   // Sub-level grouping (e.g., "T-Shirts", "Sneakers")
   final double price;
   final String currency;
 
   // Primary Media
   final String mediaUrl;
   final String mediaType;
-  final String thumbnailUrl; // 👈 NEW: Stores the cover image for videos/3D
+  final String thumbnailUrl; // Stores the cover image for videos/3D
 
   final List<Map<String, dynamic>> gallery;
 
@@ -25,6 +26,7 @@ class CatalogItem {
     required this.id,
     required this.title,
     required this.description,
+    this.department = 'General', // 👈 Default for backward compatibility
     required this.category,
     required this.price,
     this.currency = 'DZD',
@@ -43,12 +45,13 @@ class CatalogItem {
       'id': id,
       'title': title,
       'description': description,
+      'department': department, // 👈 Saved to Firestore
       'category': category,
       'price': price,
       'currency': currency,
       'mediaUrl': mediaUrl,
       'mediaType': mediaType,
-      'thumbnailUrl': thumbnailUrl, // 👈 Saved to Firestore
+      'thumbnailUrl': thumbnailUrl,
       'gallery': gallery,
       'inStock': inStock,
       'qrActionUrl': qrActionUrl,
@@ -63,12 +66,13 @@ class CatalogItem {
       id: map['id'] ?? '',
       title: map['title'] ?? '',
       description: map['description'] ?? '',
+      department: map['department'] ?? 'General', // 👈 Loaded safely from Firestore
       category: map['category'] ?? 'Uncategorized',
       price: (map['price'] ?? 0.0).toDouble(),
       currency: map['currency'] ?? 'DZD',
       mediaUrl: map['mediaUrl'] ?? '',
       mediaType: map['mediaType'] ?? 'image',
-      thumbnailUrl: map['thumbnailUrl'] ?? '', // 👈 Loaded from Firestore
+      thumbnailUrl: map['thumbnailUrl'] ?? '',
       gallery: map['gallery'] != null
           ? List<Map<String, dynamic>>.from(map['gallery'])
           : [],

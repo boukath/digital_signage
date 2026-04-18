@@ -12,6 +12,7 @@ import '../../../../features/auth/data/auth_service.dart';
 import '../../domain/catalog_item.dart';
 import '../../data/b2_storage_service.dart';
 import '../../../../core/utils/thumbnail_router.dart';
+
 class CatalogBuilderScreen extends StatefulWidget {
   const CatalogBuilderScreen({Key? key}) : super(key: key);
 
@@ -30,6 +31,7 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
 
   final _titleController = TextEditingController();
   final _descController = TextEditingController();
+  final _departmentController = TextEditingController(); // 👈 NEW: Top-level hierarchy
   final _categoryController = TextEditingController();
   final _priceController = TextEditingController();
   final _qrController = TextEditingController();
@@ -46,6 +48,18 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
     _fetchClientId();
   }
 
+  @override
+  void dispose() {
+    // 🧹 PRO FIX: Dispose controllers to prevent memory leaks
+    _titleController.dispose();
+    _descController.dispose();
+    _departmentController.dispose();
+    _categoryController.dispose();
+    _priceController.dispose();
+    _qrController.dispose();
+    super.dispose();
+  }
+
   Future<void> _fetchClientId() async {
     final appUser = await _authService.userStateStream.first;
     if (mounted) setState(() => _currentClientId = appUser?.uid);
@@ -56,6 +70,7 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
       _selectedItem = null;
       _titleController.clear();
       _descController.clear();
+      _departmentController.clear(); // 👈 Clear it
       _categoryController.clear();
       _priceController.clear();
       _qrController.clear();
@@ -69,6 +84,7 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
       _selectedItem = item;
       _titleController.text = item.title;
       _descController.text = item.description;
+      _departmentController.text = item.department; // 👈 Load it
       _categoryController.text = item.category;
       _priceController.text = item.price > 0 ? item.price.toString() : '';
       _qrController.text = item.qrActionUrl;
@@ -91,8 +107,8 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
     FilePickerResult? result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['jpg', 'jpeg', 'png', 'mp4', 'glb', 'gltf'],
-      withReadStream: !kIsWeb, // 👈 PRO FIX: Only stream on Native!
-      withData: kIsWeb,        // 👈 PRO FIX: Load bytes on Web so we can make the thumbnail!
+      withReadStream: !kIsWeb,
+      withData: kIsWeb,
       allowMultiple: true,
     );
 
@@ -100,7 +116,6 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
       setDialogState(() => _isUploadingMedia = true);
 
       for (var file in result.files) {
-        // Accept either readStream (Native) or bytes (Web)
         if (file.readStream == null && file.bytes == null) continue;
 
         final fileName = file.name;
@@ -111,24 +126,17 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
         String? downloadUrl;
         String autoThumbnailUrl = '';
 
-        // 🛠️ HELPER: Gets the correct data format depending on the platform
         Stream<Uint8List> getFileStream() {
           if (kIsWeb && file.bytes != null) {
-            return Stream.value(file.bytes!); // Web Data
+            return Stream.value(file.bytes!);
           } else {
-            return file.readStream!.map((chunk) => Uint8List.fromList(chunk)); // Native Stream
+            return file.readStream!.map((chunk) => Uint8List.fromList(chunk));
           }
         }
 
         if (fileType == 'video') {
-          print("🎬 Extracting Video Frame...");
-
-          // 🚀 This will now successfully receive the bytes on Edge/Chrome!
           Uint8List? thumbBytes = await AppThumbnailHelper.extract(file);
 
-          if (thumbBytes != null) print("✅ Thumbnail Extracted Successfully!");
-
-          // Prepare the Video Stream Upload
           Future<String?> videoUploadTask = _b2Service.uploadMediaStream(
               fileName,
               getFileStream(),
@@ -136,20 +144,17 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
               _currentClientId!
           );
 
-          // Prepare the Thumbnail Upload
           Future<String?> thumbUploadTask = Future.value(null);
           if (thumbBytes != null) {
             String thumbName = 'thumb_${DateTime.now().millisecondsSinceEpoch}.jpg';
             thumbUploadTask = _b2Service.uploadMedia(thumbName, thumbBytes, _currentClientId!);
           }
 
-          // Execute BOTH uploads at the exact same time!
           final uploadResults = await Future.wait([videoUploadTask, thumbUploadTask]);
           downloadUrl = uploadResults[0];
           if (uploadResults[1] != null) autoThumbnailUrl = uploadResults[1]!;
 
         } else {
-          // IMAGE / 3D LOGIC
           downloadUrl = await _b2Service.uploadMediaStream(
               fileName,
               getFileStream(),
@@ -158,7 +163,6 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
           );
         }
 
-        // DATABASE SAVING
         if (downloadUrl != null) {
           await _firestore.collection('clients').doc(_currentClientId).collection('media').add({
             'url': downloadUrl,
@@ -230,12 +234,9 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
                         final data = docs[index].data() as Map<String, dynamic>;
                         final mediaType = data['type'];
                         final url = data['url'];
-
-                        // 👈 PRO FIX: Read the newly saved thumbnail URL
                         final thumbUrl = data['thumbnailUrl'] ?? '';
                         final isSelected = tempGallery.any((m) => m['url'] == url);
 
-                        // 🖼️ Determine Background Image
                         String? bgImage;
                         if (mediaType == 'image' && url.isNotEmpty) {
                           bgImage = url;
@@ -249,7 +250,6 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
                               if (isSelected) {
                                 tempGallery.removeWhere((m) => m['url'] == url);
                               } else {
-                                // 👈 PRO FIX: Pass the thumbnail URL into the cinematic strip
                                 tempGallery.add({'url': url, 'type': mediaType, 'thumbnailUrl': thumbUrl});
                               }
                             });
@@ -376,6 +376,7 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
     final Map<String, dynamic> itemData = {
       'title': _titleController.text.trim(),
       'description': _descController.text.trim(),
+      'department': _departmentController.text.trim().isEmpty ? 'General' : _departmentController.text.trim(), // 👈 NEW
       'category': _categoryController.text.trim().isEmpty ? 'Uncategorized' : _categoryController.text.trim(),
       'price': parsedPrice,
       'currency': 'DZD',
@@ -514,7 +515,12 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
           return CatalogItem.fromMap(json as Map<String, dynamic>);
         }).toList();
 
-        catalogItems.sort((a, b) => a.category.compareTo(b.category));
+        // 👈 Sort primarily by Department, then Category
+        catalogItems.sort((a, b) {
+          int deptCompare = a.department.compareTo(b.department);
+          if (deptCompare != 0) return deptCompare;
+          return a.category.compareTo(b.category);
+        });
 
         if (catalogItems.isEmpty) return Center(child: Text("No products yet.", style: GoogleFonts.poppins(color: Colors.white54)));
 
@@ -534,7 +540,13 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
                     : (item.mediaType == '3d' && avatarUrl.isEmpty ? const Icon(Icons.view_in_ar, color: Colors.white) : null),
               ),
               title: Text(item.title, style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
-              subtitle: Text(item.price > 0 ? "${item.category} • ${item.price} DZD" : item.category, style: GoogleFonts.poppins(color: Colors.white54, fontSize: 12)),
+
+              // 👈 Updated subtitle to show Breadcrumb: Department > Category
+              subtitle: Text(
+                  item.price > 0 ? "${item.department} > ${item.category} • ${item.price} DZD" : "${item.department} > ${item.category}",
+                  style: GoogleFonts.poppins(color: Colors.white54, fontSize: 12)
+              ),
+
               onTap: () => _loadItemIntoForm(item),
               trailing: IconButton(
                 icon: const Icon(Icons.delete, color: Colors.redAccent, size: 20),
@@ -557,15 +569,25 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
             Text(_selectedItem == null ? "Create New Product" : "Edit Product", style: GoogleFonts.poppins(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
             const SizedBox(height: 24),
 
+            // 👈 REORGANIZED FORM FIELDS
             Row(
               children: [
-                Expanded(child: _buildTextField(_titleController, "Product Name *", isRequired: true)),
+                Expanded(flex: 2, child: _buildTextField(_titleController, "Product Name *", isRequired: true)),
                 const SizedBox(width: 16),
-                Expanded(child: _buildTextField(_categoryController, "Category (Optional)")),
-                const SizedBox(width: 16),
-                Expanded(child: _buildTextField(_priceController, "Price in DZD (Optional)", isNumber: true)),
+                Expanded(flex: 1, child: _buildTextField(_priceController, "Price in DZD (Optional)", isNumber: true)),
               ],
             ),
+            const SizedBox(height: 16),
+
+            // 👈 NEW ROW FOR HIERARCHY
+            Row(
+              children: [
+                Expanded(child: _buildTextField(_departmentController, "Department (e.g., MEN, WOMEN, KIDS)")),
+                const SizedBox(width: 16),
+                Expanded(child: _buildTextField(_categoryController, "Category (e.g., T-Shirts, Shoes)")),
+              ],
+            ),
+
             const SizedBox(height: 16),
             _buildTextField(_descController, "Detailed Description (Optional)", maxLines: 4),
             const SizedBox(height: 16),

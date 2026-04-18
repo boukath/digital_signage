@@ -1,9 +1,15 @@
+// File: lib/features/kiosk_player/presentation/screens/kiosk_main_screen.dart
+
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 // Import your views
 import 'screensaver_view.dart';
-import 'interactive_catalog_view.dart'; // NEW: We added this import!
+import 'interactive_catalog_view.dart';
+// 👈 NEW IMPORTS FOR UNPAIRING
+import '../../data/kiosk_pairing_service.dart';
+import 'kiosk_boot_screen.dart';
 
 class KioskMainScreen extends StatefulWidget {
   final String clientId;
@@ -17,6 +23,11 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
   bool _isInteractiveMode = false;
   Timer? _idleTimer;
   final int _idleTimeoutSeconds = 30;
+
+  // 👈 NEW: Secret Menu Variables
+  int _secretTapCount = 0;
+  Timer? _secretTapTimer;
+  final KioskPairingService _pairingService = KioskPairingService();
 
   @override
   void initState() {
@@ -44,9 +55,72 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
     }
   }
 
+  // 👈 NEW: Handles the 5 rapid taps in the top right corner
+  void _handleSecretAdminTap() {
+    _secretTapCount++;
+
+    // Cancel the old timer and start a new 2-second window
+    _secretTapTimer?.cancel();
+    _secretTapTimer = Timer(const Duration(seconds: 2), () {
+      _secretTapCount = 0; // Reset if they are too slow
+    });
+
+    if (_secretTapCount >= 5) {
+      _secretTapCount = 0; // Reset counter
+      _showAdminDialog();  // Trigger the secret menu!
+    }
+  }
+
+  // 👈 NEW: The Secret Unpair Menu
+  void _showAdminDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: Colors.black87,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Colors.white24, width: 2),
+          ),
+          title: Text("Secret Admin Menu", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+          content: Text(
+            "Do you want to unpair this screen from the current account? This will return the screen to the PIN pairing mode.",
+            style: GoogleFonts.poppins(color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text("Cancel", style: GoogleFonts.poppins(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+              onPressed: () async {
+                Navigator.of(context).pop(); // Close dialog
+
+                // 1. Clear the saved Client ID from storage
+                await _pairingService.unpairDevice();
+
+                // 2. Route the screen back to the Boot/PIN screen
+                if (mounted) {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => const KioskBootScreen()),
+                  );
+                }
+              },
+              child: Text("Unpair Screen", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   void dispose() {
     _idleTimer?.cancel();
+    _secretTapTimer?.cancel();
     super.dispose();
   }
 
@@ -57,14 +131,13 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
       // The Listener catches EVERY tap, swipe, or scroll on the entire TV screen
       body: Listener(
         onPointerDown: (_) => _handleUserInteraction(),
-        onPointerMove: (_) => _handleUserInteraction(), // Captures 3D model spinning!
+        onPointerMove: (_) => _handleUserInteraction(),
         onPointerUp: (_) => _handleUserInteraction(),
         behavior: HitTestBehavior.translucent,
         child: Stack(
           children: [
             // ==========================================
             // STATE A: The Passive Screensaver
-            // Always running in background, but pauses decoding when hidden
             // ==========================================
             ScreensaverView(
                 clientId: widget.clientId,
@@ -76,13 +149,27 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
             // ==========================================
             AnimatedOpacity(
               opacity: _isInteractiveMode ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 600), // Smooth premium fade
+              duration: const Duration(milliseconds: 600),
               child: IgnorePointer(
-                // Ignore touches if it's invisible so it doesn't block the screensaver
                 ignoring: !_isInteractiveMode,
-                // Replace the temporary dark overlay with our new Interactive UI!
                 child: InteractiveCatalogView(
                   clientId: widget.clientId,
+                ),
+              ),
+            ),
+
+            // ==========================================
+            // 🛡️ SECRET ADMIN BUTTON
+            // ==========================================
+            Positioned(
+              top: 0,
+              right: 0,
+              child: GestureDetector(
+                onTap: _handleSecretAdminTap,
+                child: Container(
+                  width: 120,
+                  height: 120,
+                  color: Colors.transparent, // Completely invisible!
                 ),
               ),
             ),

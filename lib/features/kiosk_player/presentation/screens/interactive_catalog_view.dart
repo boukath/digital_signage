@@ -25,17 +25,20 @@ class InteractiveCatalogView extends StatefulWidget {
 class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with TickerProviderStateMixin {
   final LocalCacheService _cacheService = LocalCacheService();
 
-  String? _selectedCategory;
-  int _currentItemIndex = 0;
+  // --- 🌟 NEW: 3-TIER NAVIGATION STATE ---
+  String? _selectedDepartment;     // LEVEL 1: e.g., "MEN"
+  String? _selectedCategoryFilter; // LEVEL 2: Sub-filter e.g., "T-Shirts"
+  CatalogItem? _selectedProduct;   // LEVEL 3: The actual product
 
-  // 📸 NEW: Tracks which gallery image is currently selected!
   int _currentGalleryIndex = 0;
-
   String? _localMediaPath;
-  String _currentMediaType = 'image'; // Tracks type of currently viewed gallery item
+  String _currentMediaType = 'image';
 
   VideoPlayerController? _videoController;
-  PageController? _pageController;
+
+  // Controllers for the premium carousels
+  late PageController _deptPageController;
+  late PageController _aislePageController;
 
   Timer? _idleTimer;
   bool _showUI = true;
@@ -44,6 +47,10 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
   @override
   void initState() {
     super.initState();
+    _deptPageController = PageController();
+    // viewportFraction 0.5 allows us to see the items on the left and right!
+    _aislePageController = PageController(viewportFraction: 0.5);
+
     _startIdleTimer();
     _imageAnimationController = AnimationController(
       vsync: this,
@@ -56,7 +63,8 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     _idleTimer?.cancel();
     _imageAnimationController?.dispose();
     _videoController?.dispose();
-    _pageController?.dispose();
+    _deptPageController.dispose();
+    _aislePageController.dispose();
     super.dispose();
   }
 
@@ -67,8 +75,8 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
 
   void _startIdleTimer() {
     _idleTimer?.cancel();
-    _idleTimer = Timer(const Duration(seconds: 8), () {
-      if (mounted && _selectedCategory != null) {
+    _idleTimer = Timer(const Duration(seconds: 15), () {
+      if (mounted && _selectedDepartment != null) {
         setState(() => _showUI = false);
       }
     });
@@ -97,7 +105,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     }
   }
 
-  // 📸 UPDATED: Now resolves specific URLs from the gallery, not just the main item
   Future<void> _resolveMediaPath(String targetUrl, String targetType) async {
     setState(() {
       _localMediaPath = null;
@@ -140,53 +147,49 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     }
   }
 
-  void _openCategory(String category, List<CatalogItem> categoryItems) {
+  // --- 🌟 SMART NAVIGATION LOGIC ---
+
+  void _openDepartment(String department) {
     setState(() {
-      _selectedCategory = category;
-      _currentItemIndex = 0;
-      _currentGalleryIndex = 0;
-      _pageController = PageController(initialPage: 0);
+      _selectedDepartment = department;
+      _selectedCategoryFilter = null;
+      _selectedProduct = null;
     });
     _userInteracted();
-    if (categoryItems.isNotEmpty) {
-      _onItemChanged(0, categoryItems[0]);
-    }
   }
 
-  void _closeCategory() {
+  void _openProduct(CatalogItem item) {
     setState(() {
-      _selectedCategory = null;
-      _showUI = true;
-    });
-    _disposeVideo();
-    _idleTimer?.cancel();
-  }
-
-  void _onItemChanged(int index, CatalogItem item) {
-    setState(() {
-      _currentItemIndex = index;
-      _currentGalleryIndex = 0; // Reset gallery index when swiping to a new product
+      _selectedProduct = item;
+      _currentGalleryIndex = 0;
     });
     _userInteracted();
     _fireAnalyticsEvent(item.id, 'view');
 
-    // Resolve the first item in the gallery (or fallback to primary media)
+    // Trigger the heavy media to load immediately
     final initialMedia = _getGalleryList(item).first;
     _resolveMediaPath(initialMedia['url'], initialMedia['type']);
   }
 
-  // 📸 HELPER: Gets the gallery correctly without duplicating the main image
-  List<Map<String, dynamic>> _getGalleryList(CatalogItem item) {
-    // If the product has a cinematic gallery, use it exactly as saved!
-    if (item.gallery.isNotEmpty) {
-      return item.gallery;
-    }
+  void _goBack() {
+    _userInteracted();
+    _disposeVideo(); // Stop any playing video
 
-    // For backwards compatibility: If it's an old product created before
-    // the gallery update, fallback to showing the single main image.
-    return [
-      {'url': item.mediaUrl, 'type': item.mediaType}
-    ];
+    setState(() {
+      if (_selectedProduct != null) {
+        // If in Fitting Room, go back to Aisle
+        _selectedProduct = null;
+      } else if (_selectedDepartment != null) {
+        // If in Aisle, go back to Lookbook
+        _selectedDepartment = null;
+        _selectedCategoryFilter = null;
+      }
+    });
+  }
+
+  List<Map<String, dynamic>> _getGalleryList(CatalogItem item) {
+    if (item.gallery.isNotEmpty) return item.gallery;
+    return [{'url': item.mediaUrl, 'type': item.mediaType}];
   }
 
   String _formatDuration(Duration duration) {
@@ -199,129 +202,341 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [AppColors.backgroundGradientStart, AppColors.backgroundGradientEnd],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: GestureDetector(
-          onTap: _userInteracted,
-          onPanDown: (_) => _userInteracted(),
-          child: StreamBuilder<DocumentSnapshot>(
-            stream: FirebaseFirestore.instance.collection('clients').doc(widget.clientId).snapshots(),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData || !snapshot.data!.exists) {
-                return const Center(child: CircularProgressIndicator(color: AppColors.textPrimary));
-              }
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onTap: _userInteracted,
+        onPanDown: (_) => _userInteracted(),
+        child: StreamBuilder<DocumentSnapshot>(
+          stream: FirebaseFirestore.instance.collection('clients').doc(widget.clientId).snapshots(),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData || !snapshot.data!.exists) {
+              return const Center(child: CircularProgressIndicator(color: AppColors.textPrimary));
+            }
 
-              final data = snapshot.data!.data() as Map<String, dynamic>;
-              final List<dynamic> rawCatalog = data['catalog'] ?? [];
-              final List<CatalogItem> catalogItems = rawCatalog.map((json) => CatalogItem.fromMap(json as Map<String, dynamic>)).toList();
+            final data = snapshot.data!.data() as Map<String, dynamic>;
+            final List<dynamic> rawCatalog = data['catalog'] ?? [];
+            final List<CatalogItem> catalogItems = rawCatalog.map((json) => CatalogItem.fromMap(json as Map<String, dynamic>)).toList();
 
-              if (catalogItems.isEmpty) {
-                return const Center(child: Text("Catalog is empty.", style: TextStyle(color: Colors.white54, fontSize: 24, letterSpacing: 2)));
-              }
+            if (catalogItems.isEmpty) {
+              return const Center(child: Text("Catalog is empty.", style: TextStyle(color: Colors.white54, fontSize: 24, letterSpacing: 2)));
+            }
 
-              final Map<String, List<CatalogItem>> groupedItems = {};
-              for (var item in catalogItems) {
-                String cat = item.category.isNotEmpty ? item.category : 'Uncategorized';
-                groupedItems.putIfAbsent(cat, () => []).add(item);
-              }
+            // 🌟 Group by DEPARTMENT instead of Category
+            final Map<String, List<CatalogItem>> groupedByDept = {};
+            for (var item in catalogItems) {
+              String dept = item.department.isNotEmpty ? item.department : 'General';
+              groupedByDept.putIfAbsent(dept, () => []).add(item);
+            }
 
-              return AnimatedSwitcher(
-                duration: const Duration(milliseconds: 800),
-                switchInCurve: Curves.easeOutCubic,
-                switchOutCurve: Curves.easeInCubic,
-                child: _selectedCategory == null
-                    ? _buildCategoryGrid(groupedItems)
-                    : _buildEditorialItemView(groupedItems[_selectedCategory]!),
-              );
-            },
-          ),
+            return AnimatedSwitcher(
+              duration: const Duration(milliseconds: 800),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              child: _selectedDepartment == null
+                  ? _buildLevel1Lookbook(groupedByDept)
+                  : (_selectedProduct == null
+                  ? _buildLevel2Aisle(groupedByDept[_selectedDepartment]!)
+                  : _buildLevel3FittingRoom(_selectedProduct!)),
+            );
+          },
         ),
       ),
     );
   }
 
-  // --- 1. PREMIUM CATEGORY GRID ---
-  Widget _buildCategoryGrid(Map<String, List<CatalogItem>> groupedItems) {
-    final categories = groupedItems.keys.toList();
+  // =========================================================================
+  // LEVEL 1: THE LOOKBOOK (Vertical Parallax Carousel)
+  // =========================================================================
+  Widget _buildLevel1Lookbook(Map<String, List<CatalogItem>> groupedByDept) {
+    final departments = groupedByDept.keys.toList();
 
-    return Padding(
-      padding: const EdgeInsets.all(48.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "EXPLORE COLLECTIONS",
-            style: TextStyle(color: AppColors.textPrimary, fontSize: 42, fontWeight: FontWeight.w300, letterSpacing: 8),
-          ),
-          const SizedBox(height: 48),
-          Expanded(
-            child: GridView.builder(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                childAspectRatio: 0.8,
-                crossAxisSpacing: 32,
-                mainAxisSpacing: 32,
-              ),
-              itemCount: categories.length,
-              itemBuilder: (context, index) {
-                String categoryName = categories[index];
-                CatalogItem previewItem = groupedItems[categoryName]!.first;
+    return Stack(
+      children: [
+        PageView.builder(
+          controller: _deptPageController,
+          scrollDirection: Axis.vertical, // Vertical scrolling feels more premium here
+          itemCount: departments.length,
+          itemBuilder: (context, index) {
+            final deptName = departments[index];
+            final deptItems = groupedByDept[deptName]!;
+            // Use the first item's image as the Hero cover
+            final previewItem = deptItems.first;
+            final bgUrl = previewItem.mediaType == 'image' ? previewItem.mediaUrl : previewItem.thumbnailUrl;
 
-                // 📸 THE FIX IS RIGHT HERE: Use thumbnailUrl if it's a video!
-                String gridImage = previewItem.mediaType == 'image' ? previewItem.mediaUrl : previewItem.thumbnailUrl;
+            return GestureDetector(
+              onTap: () => _openDepartment(deptName),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // --- PARALLAX BACKGROUND ---
+                  AnimatedBuilder(
+                    animation: _deptPageController,
+                    builder: (context, child) {
+                      double pageOffset = 0;
+                      if (_deptPageController.position.haveDimensions) {
+                        pageOffset = _deptPageController.page! - index;
+                      }
+                      return Transform.translate(
+                        // Shift the image vertically based on scroll position
+                        offset: Offset(0, pageOffset * MediaQuery.of(context).size.height * 0.4),
+                        child: Image.network(
+                          bgUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (c, e, s) => Container(color: Colors.grey[900]),
+                        ),
+                      );
+                    },
+                  ),
 
-                return GestureDetector(
-                  onTap: () => _openCategory(categoryName, groupedItems[categoryName]!),
-                  child: Container(
+                  // --- DARK GRADIENT OVERLAY ---
+                  Container(
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 10))],
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(24),
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          _buildPremiumThumbnail(gridImage), // 👈 Passing the resolved image
-                          Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [Colors.black.withOpacity(0.0), Colors.black.withOpacity(0.8)],
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                              ),
-                            ),
-                          ),
-                          Positioned(
-                            bottom: 32,
-                            left: 32,
-                            right: 32,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  categoryName.toUpperCase(),
-                                  style: const TextStyle(color: AppColors.textPrimary, fontSize: 32, fontWeight: FontWeight.w600, letterSpacing: 4),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  "${groupedItems[categoryName]!.length} Items",
-                                  style: const TextStyle(color: Colors.white70, fontSize: 18, letterSpacing: 2),
-                                ),
-                              ],
-                            ),
-                          )
-                        ],
+                      gradient: LinearGradient(
+                        colors: [Colors.black.withOpacity(0.2), Colors.black.withOpacity(0.8)],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
                       ),
                     ),
                   ),
+
+                  // --- MASSIVE TYPOGRAPHY ---
+                  Align(
+                    alignment: Alignment.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          deptName.toUpperCase(),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 120,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 20,
+                            height: 1.0,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                          decoration: BoxDecoration(
+                              border: Border.all(color: Colors.white),
+                              borderRadius: BorderRadius.circular(30)
+                          ),
+                          child: Text(
+                            "EXPLORE ${deptItems.length} ITEMS",
+                            style: const TextStyle(color: Colors.white, fontSize: 16, letterSpacing: 4, fontWeight: FontWeight.bold),
+                          ),
+                        )
+                      ],
+                    ),
+                  )
+                ],
+              ),
+            );
+          },
+        ),
+
+        // Custom Scroll Indicator
+        Positioned(
+          right: 48,
+          top: 0,
+          bottom: 0,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.keyboard_arrow_up, color: Colors.white54),
+                const SizedBox(height: 8),
+                const Text("SWIPE", style: TextStyle(color: Colors.white54, letterSpacing: 4, fontSize: 10)),
+                const SizedBox(height: 8),
+                const Icon(Icons.keyboard_arrow_down, color: Colors.white54),
+              ],
+            ),
+          ),
+        )
+      ],
+    );
+  }
+
+  // =========================================================================
+  // LEVEL 2: THE AISLE (Horizontal Dynamic Carousel)
+  // =========================================================================
+  Widget _buildLevel2Aisle(List<CatalogItem> deptItems) {
+    // Extract unique categories within this department for the filter chips
+    final Set<String> categories = {"All"};
+    categories.addAll(deptItems.map((e) => e.category));
+
+    // Apply the filter
+    final List<CatalogItem> displayItems = _selectedCategoryFilter == null || _selectedCategoryFilter == "All"
+        ? deptItems
+        : deptItems.where((i) => i.category == _selectedCategoryFilter).toList();
+
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF1A1A24), Color(0xFF0A0A0A)],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // --- HEADER & NAVIGATION ---
+          Padding(
+            padding: const EdgeInsets.fromLTRB(48, 64, 48, 0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    GestureDetector(
+                      onTap: _goBack,
+                      child: const Row(
+                        children: [
+                          Icon(Icons.arrow_back_ios_new, color: Colors.white54, size: 16),
+                          SizedBox(width: 8),
+                          Text("BACK TO DEPARTMENTS", style: TextStyle(color: Colors.white54, letterSpacing: 2, fontSize: 12, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      _selectedDepartment!.toUpperCase(),
+                      style: const TextStyle(color: Colors.white, fontSize: 56, fontWeight: FontWeight.w300, letterSpacing: 8),
+                    ),
+                  ],
+                ),
+
+                // --- CATEGORY FILTER CHIPS ---
+                Row(
+                  children: categories.map((cat) {
+                    bool isSelected = (_selectedCategoryFilter ?? "All") == cat;
+                    return GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _selectedCategoryFilter = cat;
+                        });
+                        _userInteracted();
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 300),
+                        margin: const EdgeInsets.only(left: 16),
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: isSelected ? Colors.white : Colors.transparent,
+                          border: Border.all(color: isSelected ? Colors.white : Colors.white24),
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                        child: Text(
+                          cat.toUpperCase(),
+                          style: TextStyle(
+                              color: isSelected ? Colors.black : Colors.white70,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 2
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                )
+              ],
+            ),
+          ),
+          const SizedBox(height: 64),
+
+          // --- HORIZONTAL CAROUSEL ---
+          Expanded(
+            child: displayItems.isEmpty
+                ? const Center(child: Text("No items match this filter.", style: TextStyle(color: Colors.white54, fontSize: 18)))
+                : PageView.builder(
+              controller: _aislePageController,
+              itemCount: displayItems.length,
+              itemBuilder: (context, index) {
+                final item = displayItems[index];
+                final bgUrl = item.mediaType == 'image' ? item.mediaUrl : item.thumbnailUrl;
+
+                return AnimatedBuilder(
+                  animation: _aislePageController,
+                  builder: (context, child) {
+                    double value = 1.0;
+                    if (_aislePageController.position.haveDimensions) {
+                      value = _aislePageController.page! - index;
+                      value = (1 - (value.abs() * 0.3)).clamp(0.0, 1.0); // Scale down side items
+                    }
+
+                    // The active item is fully opaque, side items are faded
+                    final opacity = (value - 0.7) / 0.3;
+
+                    return Center(
+                      child: Transform.scale(
+                        scale: Curves.easeOut.transform(value),
+                        child: Opacity(
+                          opacity: opacity.clamp(0.3, 1.0),
+                          child: GestureDetector(
+                            onTap: () => _openProduct(item),
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(24),
+                                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 30, offset: const Offset(0, 20))],
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(24),
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    Image.network(bgUrl, fit: BoxFit.cover, errorBuilder: (c,e,s) => Container(color: Colors.grey[800])),
+
+                                    // Gradient at bottom for text
+                                    Container(
+                                      decoration: BoxDecoration(
+                                          gradient: LinearGradient(
+                                            colors: [Colors.transparent, Colors.black.withOpacity(0.9)],
+                                            begin: Alignment.center,
+                                            end: Alignment.bottomCenter,
+                                          )
+                                      ),
+                                    ),
+
+                                    // Item Info
+                                    Positioned(
+                                      bottom: 32,
+                                      left: 32,
+                                      right: 32,
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(item.title, style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+                                          const SizedBox(height: 8),
+                                          Text("${item.price.toStringAsFixed(2)} ${item.currency}", style: const TextStyle(color: Colors.white70, fontSize: 18)),
+                                        ],
+                                      ),
+                                    ),
+
+                                    // Video/3D Badge
+                                    if (item.mediaType != 'image')
+                                      Positioned(
+                                        top: 24,
+                                        right: 24,
+                                        child: Container(
+                                          padding: const EdgeInsets.all(12),
+                                          decoration: BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                                          child: Icon(item.mediaType == 'video' ? Icons.play_arrow : Icons.view_in_ar, color: Colors.white),
+                                        ),
+                                      )
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
                 );
               },
             ),
@@ -331,20 +546,179 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     );
   }
 
-  // --- 2. THE NEW 60/40 EDITORIAL VIEW ---
-  Widget _buildEditorialItemView(List<CatalogItem> items) {
+  // =========================================================================
+  // LEVEL 3: THE FITTING ROOM (60/40 Split Cinematic View)
+  // =========================================================================
+  Widget _buildLevel3FittingRoom(CatalogItem item) {
+    bool isVideo = _currentMediaType == 'video';
+    final List<Map<String, dynamic>> activeGallery = _getGalleryList(item);
+
     return Stack(
-      fit: StackFit.expand,
       children: [
-        PageView.builder(
-          controller: _pageController,
-          itemCount: items.length,
-          onPageChanged: (index) => _onItemChanged(index, items[index]),
-          itemBuilder: (context, index) {
-            return _buildEditorialPage(items[index]);
-          },
+        Row(
+          children: [
+            // LEFT 60%: Immersive Media Viewer
+            Expanded(
+              flex: 6,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 800),
+                    child: Container(
+                      key: ValueKey<String>(_localMediaPath ?? 'loading'),
+                      child: _buildSmartMediaViewer(),
+                    ),
+                  ),
+
+                  // Shadow blending into text panel
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Container(
+                      width: 80,
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [Colors.transparent, Color(0xFF0A0A0A)],
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // Cinematic Thumbnail Strip
+                  if (activeGallery.length > 1)
+                    AnimatedOpacity(
+                      opacity: _showUI ? 1.0 : 0.0,
+                      duration: const Duration(milliseconds: 500),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 48.0, top: 120),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: List.generate(activeGallery.length, (index) {
+                              bool isSelected = _currentGalleryIndex == index;
+                              Map<String, dynamic> media = activeGallery[index];
+                              String? thumbUrl = media['thumbnailUrl'];
+                              String? bgUrl = media['type'] == 'image' ? media['url'] : (thumbUrl != null && thumbUrl.isNotEmpty ? thumbUrl : null);
+
+                              return GestureDetector(
+                                onTap: () {
+                                  _userInteracted();
+                                  if (_currentGalleryIndex != index) {
+                                    setState(() => _currentGalleryIndex = index);
+                                    _resolveMediaPath(media['url'], media['type']);
+                                  }
+                                },
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 300),
+                                  margin: const EdgeInsets.symmetric(vertical: 8),
+                                  width: 60,
+                                  height: 80,
+                                  decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: isSelected ? Colors.white : Colors.white24, width: isSelected ? 2 : 1),
+                                      boxShadow: isSelected ? [BoxShadow(color: Colors.white.withOpacity(0.2), blurRadius: 10)] : [],
+                                      image: bgUrl != null ? DecorationImage(
+                                        image: NetworkImage(bgUrl),
+                                        fit: BoxFit.cover,
+                                        colorFilter: isSelected ? null : ColorFilter.mode(Colors.black.withOpacity(0.4), BlendMode.darken),
+                                      ) : null
+                                  ),
+                                  child: media['type'] == 'video'
+                                      ? const Center(child: Icon(Icons.play_circle_fill, color: Colors.white, size: 24))
+                                      : (media['type'] == '3d' ? const Center(child: Icon(Icons.view_in_ar, color: Colors.white, size: 24)) : null),
+                                ),
+                              );
+                            }),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
+            // RIGHT 40%: The Editorial Typography Column
+            Expanded(
+              flex: 4,
+              child: Container(
+                color: const Color(0xFF0A0A0A),
+                padding: const EdgeInsets.fromLTRB(48, 80, 80, 80),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      item.category.toUpperCase(),
+                      style: const TextStyle(color: Colors.white54, fontSize: 16, fontWeight: FontWeight.w600, letterSpacing: 4),
+                    ),
+                    const SizedBox(height: 16),
+
+                    Text(
+                      item.title,
+                      style: const TextStyle(color: AppColors.textPrimary, fontSize: 56, fontWeight: FontWeight.bold, height: 1.1, letterSpacing: -1),
+                    ),
+                    const SizedBox(height: 24),
+
+                    Text(
+                      "${item.price.toStringAsFixed(2)} ${item.currency}",
+                      style: const TextStyle(color: Colors.white70, fontSize: 28, fontWeight: FontWeight.w300, letterSpacing: 1),
+                    ),
+
+                    if (!item.inStock) ...[
+                      const SizedBox(height: 12),
+                      const Text("CURRENTLY OUT OF STOCK", style: TextStyle(color: Colors.redAccent, fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 2)),
+                    ],
+
+                    const SizedBox(height: 48),
+
+                    Text(
+                      item.description,
+                      style: const TextStyle(color: Colors.white54, fontSize: 18, height: 1.6),
+                    ),
+
+                    const Spacer(),
+
+                    if (isVideo) ...[
+                      _buildCompactVideoControls(),
+                      const SizedBox(height: 48),
+                    ],
+
+                    if (item.qrActionUrl.isNotEmpty)
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          GestureDetector(
+                            onTap: () => _fireAnalyticsEvent(item.id, 'qr_scan'),
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8)),
+                              child: QrImageView(data: item.qrActionUrl, version: QrVersions.auto, size: 100.0),
+                            ),
+                          ),
+                          const SizedBox(width: 24),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text("DISCOVER MORE", style: TextStyle(color: AppColors.textPrimary, fontSize: 14, letterSpacing: 2, fontWeight: FontWeight.bold)),
+                                SizedBox(height: 8),
+                                Text("Scan this code with your phone camera to view full specifications or purchase instantly.", style: TextStyle(color: Colors.white54, fontSize: 14, height: 1.5)),
+                              ],
+                            ),
+                          )
+                        ],
+                      )
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
 
+        // BACK BUTTON OVERLAY
         AnimatedOpacity(
           opacity: _showUI ? 1.0 : 0.0,
           duration: const Duration(milliseconds: 500),
@@ -353,7 +727,7 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
             child: Padding(
               padding: const EdgeInsets.all(48.0),
               child: GestureDetector(
-                onTap: _closeCategory,
+                onTap: _goBack,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(50),
                   child: BackdropFilter(
@@ -370,229 +744,13 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                         children: [
                           Icon(Icons.arrow_back_ios_new, color: AppColors.textPrimary, size: 18),
                           SizedBox(width: 12),
-                          Text("COLLECTIONS", style: TextStyle(color: AppColors.textPrimary, fontSize: 14, letterSpacing: 2, fontWeight: FontWeight.bold)),
+                          Text("BACK TO AISLE", style: TextStyle(color: AppColors.textPrimary, fontSize: 14, letterSpacing: 2, fontWeight: FontWeight.bold)),
                         ],
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
-        ),
-
-        AnimatedOpacity(
-          opacity: _showUI ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 500),
-          child: Align(
-            alignment: Alignment.centerRight,
-            child: Padding(
-              padding: const EdgeInsets.only(right: 24.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: List.generate(items.length, (index) {
-                  return AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    height: _currentItemIndex == index ? 32 : 8,
-                    width: 4,
-                    decoration: BoxDecoration(
-                      color: _currentItemIndex == index ? AppColors.textPrimary : AppColors.textPrimary.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  );
-                }),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // --- 3. THE 60/40 PAGE LAYOUT WITH GALLERY STRIP ---
-  Widget _buildEditorialPage(CatalogItem item) {
-    bool isVideo = _currentMediaType == 'video';
-
-    // Get the full list of media (Main Image + Gallery)
-    final List<Map<String, dynamic>> activeGallery = _getGalleryList(item);
-
-    return Row(
-      children: [
-        // LEFT 60%: Immersive Media Art Gallery
-        Expanded(
-          flex: 6,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              // 📸 THE SMOOTH CROSSFADING MEDIA VIEWER
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 800),
-                switchInCurve: Curves.easeOut,
-                switchOutCurve: Curves.easeIn,
-                // The Key ensures Flutter knows when to trigger the fade animation
-                child: Container(
-                  key: ValueKey<String>(_localMediaPath ?? 'loading'),
-                  child: _buildSmartMediaViewer(),
-                ),
-              ),
-
-              // Shadow blending into the text panel
-              Align(
-                alignment: Alignment.centerRight,
-                child: Container(
-                  width: 80,
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [Colors.transparent, Color(0xFF0A0A0A)],
-                      begin: Alignment.centerLeft,
-                      end: Alignment.centerRight,
-                    ),
-                  ),
-                ),
-              ),
-
-              // 📸 NEW: THE CINEMATIC THUMBNAIL STRIP
-              if (activeGallery.length > 1) // Only show if there's more than 1 image
-                AnimatedOpacity(
-                  opacity: _showUI ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 500),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 48.0, top: 120), // Kept below the back button
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: List.generate(activeGallery.length, (index) {
-                          bool isSelected = _currentGalleryIndex == index;
-                          Map<String, dynamic> media = activeGallery[index];
-
-                          // 📸 NEW FIX: Properly loading the video thumbnail for the strip!
-                          String? thumbUrl = media['thumbnailUrl'];
-                          String? bgUrl = media['type'] == 'image' ? media['url'] : (thumbUrl != null && thumbUrl.isNotEmpty ? thumbUrl : null);
-
-                          return GestureDetector(
-                            onTap: () {
-                              _userInteracted();
-                              if (_currentGalleryIndex != index) {
-                                setState(() => _currentGalleryIndex = index);
-                                _resolveMediaPath(media['url'], media['type']);
-                              }
-                            },
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 300),
-                              margin: const EdgeInsets.symmetric(vertical: 8),
-                              width: 60,
-                              height: 80,
-                              decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: isSelected ? Colors.white : Colors.white24,
-                                    width: isSelected ? 2 : 1,
-                                  ),
-                                  boxShadow: isSelected ? [
-                                    BoxShadow(color: Colors.white.withOpacity(0.2), blurRadius: 10)
-                                  ] : [],
-                                  image: bgUrl != null ? DecorationImage(
-                                    image: NetworkImage(bgUrl),
-                                    fit: BoxFit.cover,
-                                    colorFilter: isSelected
-                                        ? null
-                                        : ColorFilter.mode(Colors.black.withOpacity(0.4), BlendMode.darken),
-                                  ) : null
-                              ),
-                              // Tiny icon overlay if it's a video or 3D model
-                              child: media['type'] == 'video'
-                                  ? const Center(child: Icon(Icons.play_circle_fill, color: Colors.white, size: 24))
-                                  : (media['type'] == '3d'
-                                  ? const Center(child: Icon(Icons.view_in_ar, color: Colors.white, size: 24))
-                                  : null),
-                            ),
-                          );
-                        }),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-
-        // RIGHT 40%: The Editorial Typography Column
-        Expanded(
-          flex: 4,
-          child: Container(
-            color: const Color(0xFF0A0A0A),
-            padding: const EdgeInsets.fromLTRB(48, 80, 80, 80),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  item.category.toUpperCase(),
-                  style: const TextStyle(color: Colors.white54, fontSize: 16, fontWeight: FontWeight.w600, letterSpacing: 4),
-                ),
-                const SizedBox(height: 16),
-
-                Text(
-                  item.title,
-                  style: const TextStyle(color: AppColors.textPrimary, fontSize: 56, fontWeight: FontWeight.bold, height: 1.1, letterSpacing: -1),
-                ),
-                const SizedBox(height: 24),
-
-                Text(
-                  "${item.price.toStringAsFixed(2)} ${item.currency}",
-                  style: const TextStyle(color: Colors.white70, fontSize: 28, fontWeight: FontWeight.w300, letterSpacing: 1),
-                ),
-
-                if (!item.inStock) ...[
-                  const SizedBox(height: 12),
-                  const Text("CURRENTLY OUT OF STOCK", style: TextStyle(color: Colors.redAccent, fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 2)),
-                ],
-
-                const SizedBox(height: 48),
-
-                Text(
-                  item.description,
-                  style: const TextStyle(color: Colors.white54, fontSize: 18, height: 1.6),
-                ),
-
-                const Spacer(),
-
-                if (isVideo) ...[
-                  _buildCompactVideoControls(),
-                  const SizedBox(height: 48),
-                ],
-
-                if (item.qrActionUrl.isNotEmpty)
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      GestureDetector(
-                        onTap: () => _fireAnalyticsEvent(item.id, 'qr_scan'),
-                        child: Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(8)
-                          ),
-                          child: QrImageView(data: item.qrActionUrl, version: QrVersions.auto, size: 100.0),
-                        ),
-                      ),
-                      const SizedBox(width: 24),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text("DISCOVER MORE", style: TextStyle(color: AppColors.textPrimary, fontSize: 14, letterSpacing: 2, fontWeight: FontWeight.bold)),
-                            SizedBox(height: 8),
-                            Text("Scan this code with your phone camera to view full specifications or purchase instantly.", style: TextStyle(color: Colors.white54, fontSize: 14, height: 1.5)),
-                          ],
-                        ),
-                      )
-                    ],
-                  )
-              ],
             ),
           ),
         ),
@@ -626,10 +784,7 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                   },
                   child: Container(
                     padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white24)
-                    ),
+                    decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.white24)),
                     child: Icon(value.isPlaying ? Icons.pause : Icons.play_arrow, color: AppColors.textPrimary, size: 24),
                   ),
                 ),
@@ -667,13 +822,7 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     );
   }
 
-  // --- SMART MEDIA HANDLERS ---
-  Widget _buildPremiumThumbnail(String url) {
-    if (url.isEmpty) return Container(color: Colors.grey[900]);
-    return Image.network(url, fit: BoxFit.cover, errorBuilder: (c, e, s) => Container(color: Colors.grey[900]));
-  }
-
-  // 📸 UPDATED: Now uses state variables `_localMediaPath` and `_currentMediaType` instead of hardcoding to the product item
+  // --- SMART MEDIA VIEWER ---
   Widget _buildSmartMediaViewer() {
     if (_localMediaPath == null || _localMediaPath!.isEmpty) {
       return const Center(child: CircularProgressIndicator(color: AppColors.textPrimary));

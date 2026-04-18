@@ -1,3 +1,5 @@
+// File: lib/features/kiosk_player/data/kiosk_pairing_service.dart
+
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -55,5 +57,12 @@ class KioskPairingService {
     // await _firestore.collection('pairing_codes').doc(pin).delete();
 
     print("💾 Local storage updated with Client ID.");
+  }
+
+  // 🔓 NEW: Clears the saved pairing data so the device can be paired again
+  Future<void> unpairDevice() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('paired_client_id');
+    print("🗑️ Device unpaired. SharedPreferences cleared.");
   }
 }
