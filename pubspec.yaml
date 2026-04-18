@@ -25,6 +25,8 @@ dependencies:
   window_manager: ^0.5.1
   qr_flutter: ^4.1.0
   video_thumbnail: ^0.5.3
+  launch_at_startup: ^0.3.0
+  package_info_plus: ^8.0.0
 
 dev_dependencies:
   flutter_test:
