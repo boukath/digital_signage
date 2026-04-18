@@ -25,28 +25,26 @@ class InteractiveCatalogView extends StatefulWidget {
 class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with TickerProviderStateMixin {
   final LocalCacheService _cacheService = LocalCacheService();
 
-  // State variables for navigation
   String? _selectedCategory;
   int _currentItemIndex = 0;
 
-  // Media & UI State
+  // 📸 NEW: Tracks which gallery image is currently selected!
+  int _currentGalleryIndex = 0;
+
   String? _localMediaPath;
+  String _currentMediaType = 'image'; // Tracks type of currently viewed gallery item
+
   VideoPlayerController? _videoController;
   PageController? _pageController;
 
-  // Idle Timer for Premium UI fade
   Timer? _idleTimer;
   bool _showUI = true;
-
-  // Animation Controller for the 3D Image Float
   AnimationController? _imageAnimationController;
 
   @override
   void initState() {
     super.initState();
     _startIdleTimer();
-
-    // Initialize the buttery 12-second repeating loop for images
     _imageAnimationController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 12),
@@ -62,8 +60,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     super.dispose();
   }
 
-  // --- INTERACTION & IDLE LOGIC ---
-
   void _userInteracted() {
     setState(() => _showUI = true);
     _startIdleTimer();
@@ -77,8 +73,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
       }
     });
   }
-
-  // --- ANALYTICS & CACHING ---
 
   Future<void> _fireAnalyticsEvent(String itemId, String eventType) async {
     try {
@@ -103,15 +97,20 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     }
   }
 
-  Future<void> _resolveMediaPath(CatalogItem item) async {
-    setState(() => _localMediaPath = null);
-    if (item.mediaUrl.isEmpty) return;
+  // 📸 UPDATED: Now resolves specific URLs from the gallery, not just the main item
+  Future<void> _resolveMediaPath(String targetUrl, String targetType) async {
+    setState(() {
+      _localMediaPath = null;
+      _currentMediaType = targetType;
+    });
+
+    if (targetUrl.isEmpty) return;
 
     try {
-      String localPath = await _cacheService.getCachedMediaPath(item.mediaUrl);
+      String localPath = await _cacheService.getCachedMediaPath(targetUrl);
       if (mounted) {
         setState(() => _localMediaPath = 'file://$localPath');
-        if (item.mediaType == 'video' || localPath.toLowerCase().endsWith('.mp4')) {
+        if (targetType == 'video' || localPath.toLowerCase().endsWith('.mp4')) {
           await _initializeVideo('file://$localPath');
         } else {
           _disposeVideo();
@@ -119,7 +118,7 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
       }
     } catch (e) {
       debugPrint("Falling back to network URL: $e");
-      if (mounted) setState(() => _localMediaPath = item.mediaUrl);
+      if (mounted) setState(() => _localMediaPath = targetUrl);
     }
   }
 
@@ -129,7 +128,7 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     _videoController = VideoPlayerController.file(file);
     await _videoController!.initialize();
     _videoController!.setLooping(true);
-    _videoController!.setVolume(0.0); // Starts muted
+    _videoController!.setVolume(0.0);
     _videoController!.play();
     if (mounted) setState(() {});
   }
@@ -141,12 +140,11 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     }
   }
 
-  // --- NAVIGATION HANDLERS ---
-
   void _openCategory(String category, List<CatalogItem> categoryItems) {
     setState(() {
       _selectedCategory = category;
       _currentItemIndex = 0;
+      _currentGalleryIndex = 0;
       _pageController = PageController(initialPage: 0);
     });
     _userInteracted();
@@ -165,21 +163,38 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
   }
 
   void _onItemChanged(int index, CatalogItem item) {
-    setState(() => _currentItemIndex = index);
+    setState(() {
+      _currentItemIndex = index;
+      _currentGalleryIndex = 0; // Reset gallery index when swiping to a new product
+    });
     _userInteracted();
     _fireAnalyticsEvent(item.id, 'view');
-    _resolveMediaPath(item);
+
+    // Resolve the first item in the gallery (or fallback to primary media)
+    final initialMedia = _getGalleryList(item).first;
+    _resolveMediaPath(initialMedia['url'], initialMedia['type']);
   }
 
-  // --- HELPER: FORMAT DURATION ---
+  // 📸 HELPER: Gets the gallery correctly without duplicating the main image
+  List<Map<String, dynamic>> _getGalleryList(CatalogItem item) {
+    // If the product has a cinematic gallery, use it exactly as saved!
+    if (item.gallery.isNotEmpty) {
+      return item.gallery;
+    }
+
+    // For backwards compatibility: If it's an old product created before
+    // the gallery update, fallback to showing the single main image.
+    return [
+      {'url': item.mediaUrl, 'type': item.mediaType}
+    ];
+  }
+
   String _formatDuration(Duration duration) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
     final minutes = twoDigits(duration.inMinutes.remainder(60));
     final seconds = twoDigits(duration.inSeconds.remainder(60));
     return "$minutes:$seconds";
   }
-
-  // --- BUILDERS ---
 
   @override
   Widget build(BuildContext context) {
@@ -211,7 +226,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                 return const Center(child: Text("Catalog is empty.", style: TextStyle(color: Colors.white54, fontSize: 24, letterSpacing: 2)));
               }
 
-              // Group items by category
               final Map<String, List<CatalogItem>> groupedItems = {};
               for (var item in catalogItems) {
                 String cat = item.category.isNotEmpty ? item.category : 'Uncategorized';
@@ -233,7 +247,7 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     );
   }
 
-  // --- 1. PREMIUM CATEGORY GRID (Remains largely the same) ---
+  // --- 1. PREMIUM CATEGORY GRID ---
   Widget _buildCategoryGrid(Map<String, List<CatalogItem>> groupedItems) {
     final categories = groupedItems.keys.toList();
 
@@ -260,6 +274,9 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                 String categoryName = categories[index];
                 CatalogItem previewItem = groupedItems[categoryName]!.first;
 
+                // 📸 THE FIX IS RIGHT HERE: Use thumbnailUrl if it's a video!
+                String gridImage = previewItem.mediaType == 'image' ? previewItem.mediaUrl : previewItem.thumbnailUrl;
+
                 return GestureDetector(
                   onTap: () => _openCategory(categoryName, groupedItems[categoryName]!),
                   child: Container(
@@ -272,7 +289,7 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          _buildPremiumThumbnail(previewItem.mediaUrl),
+                          _buildPremiumThumbnail(gridImage), // 👈 Passing the resolved image
                           Container(
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
@@ -319,7 +336,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Swipeable Pages containing the 60/40 Row
         PageView.builder(
           controller: _pageController,
           itemCount: items.length,
@@ -329,7 +345,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
           },
         ),
 
-        // Floating Back Button (Top Left)
         AnimatedOpacity(
           opacity: _showUI ? 1.0 : 0.0,
           duration: const Duration(milliseconds: 500),
@@ -366,7 +381,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
           ),
         ),
 
-        // Thin Pagination Dots Indicator (Right Edge)
         AnimatedOpacity(
           opacity: _showUI ? 1.0 : 0.0,
           duration: const Duration(milliseconds: 500),
@@ -396,9 +410,12 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     );
   }
 
-  // --- 3. THE 60/40 PAGE LAYOUT ---
+  // --- 3. THE 60/40 PAGE LAYOUT WITH GALLERY STRIP ---
   Widget _buildEditorialPage(CatalogItem item) {
-    bool isVideo = item.mediaType == 'video' || item.mediaUrl.toLowerCase().endsWith('.mp4');
+    bool isVideo = _currentMediaType == 'video';
+
+    // Get the full list of media (Main Image + Gallery)
+    final List<Map<String, dynamic>> activeGallery = _getGalleryList(item);
 
     return Row(
       children: [
@@ -408,9 +425,19 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
           child: Stack(
             fit: StackFit.expand,
             children: [
-              _buildSmartMediaViewer(item),
+              // 📸 THE SMOOTH CROSSFADING MEDIA VIEWER
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 800),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                // The Key ensures Flutter knows when to trigger the fade animation
+                child: Container(
+                  key: ValueKey<String>(_localMediaPath ?? 'loading'),
+                  child: _buildSmartMediaViewer(),
+                ),
+              ),
 
-              // Subtle gradient shadow blending into the dark text panel
+              // Shadow blending into the text panel
               Align(
                 alignment: Alignment.centerRight,
                 child: Container(
@@ -424,6 +451,69 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                   ),
                 ),
               ),
+
+              // 📸 NEW: THE CINEMATIC THUMBNAIL STRIP
+              if (activeGallery.length > 1) // Only show if there's more than 1 image
+                AnimatedOpacity(
+                  opacity: _showUI ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 500),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 48.0, top: 120), // Kept below the back button
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: List.generate(activeGallery.length, (index) {
+                          bool isSelected = _currentGalleryIndex == index;
+                          Map<String, dynamic> media = activeGallery[index];
+
+                          // 📸 NEW FIX: Properly loading the video thumbnail for the strip!
+                          String? thumbUrl = media['thumbnailUrl'];
+                          String? bgUrl = media['type'] == 'image' ? media['url'] : (thumbUrl != null && thumbUrl.isNotEmpty ? thumbUrl : null);
+
+                          return GestureDetector(
+                            onTap: () {
+                              _userInteracted();
+                              if (_currentGalleryIndex != index) {
+                                setState(() => _currentGalleryIndex = index);
+                                _resolveMediaPath(media['url'], media['type']);
+                              }
+                            },
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 300),
+                              margin: const EdgeInsets.symmetric(vertical: 8),
+                              width: 60,
+                              height: 80,
+                              decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: isSelected ? Colors.white : Colors.white24,
+                                    width: isSelected ? 2 : 1,
+                                  ),
+                                  boxShadow: isSelected ? [
+                                    BoxShadow(color: Colors.white.withOpacity(0.2), blurRadius: 10)
+                                  ] : [],
+                                  image: bgUrl != null ? DecorationImage(
+                                    image: NetworkImage(bgUrl),
+                                    fit: BoxFit.cover,
+                                    colorFilter: isSelected
+                                        ? null
+                                        : ColorFilter.mode(Colors.black.withOpacity(0.4), BlendMode.darken),
+                                  ) : null
+                              ),
+                              // Tiny icon overlay if it's a video or 3D model
+                              child: media['type'] == 'video'
+                                  ? const Center(child: Icon(Icons.play_circle_fill, color: Colors.white, size: 24))
+                                  : (media['type'] == '3d'
+                                  ? const Center(child: Icon(Icons.view_in_ar, color: Colors.white, size: 24))
+                                  : null),
+                            ),
+                          );
+                        }),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -432,27 +522,24 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
         Expanded(
           flex: 4,
           child: Container(
-            color: const Color(0xFF0A0A0A), // Extremely deep, luxurious dark grey/black
+            color: const Color(0xFF0A0A0A),
             padding: const EdgeInsets.fromLTRB(48, 80, 80, 80),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Category Tag
                 Text(
                   item.category.toUpperCase(),
                   style: const TextStyle(color: Colors.white54, fontSize: 16, fontWeight: FontWeight.w600, letterSpacing: 4),
                 ),
                 const SizedBox(height: 16),
 
-                // Massive Artistic Title
                 Text(
                   item.title,
                   style: const TextStyle(color: AppColors.textPrimary, fontSize: 56, fontWeight: FontWeight.bold, height: 1.1, letterSpacing: -1),
                 ),
                 const SizedBox(height: 24),
 
-                // Elegant Price
                 Text(
                   "${item.price.toStringAsFixed(2)} ${item.currency}",
                   style: const TextStyle(color: Colors.white70, fontSize: 28, fontWeight: FontWeight.w300, letterSpacing: 1),
@@ -465,21 +552,18 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
 
                 const SizedBox(height: 48),
 
-                // Clean Description Line
                 Text(
                   item.description,
                   style: const TextStyle(color: Colors.white54, fontSize: 18, height: 1.6),
                 ),
 
-                const Spacer(), // Pushes the rest to the bottom
+                const Spacer(),
 
-                // Video Controls injected elegantly into the text column
                 if (isVideo) ...[
                   _buildCompactVideoControls(),
                   const SizedBox(height: 48),
                 ],
 
-                // Isolated QR Code Section at the bottom
                 if (item.qrActionUrl.isNotEmpty)
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
@@ -584,18 +668,18 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
   }
 
   // --- SMART MEDIA HANDLERS ---
-
   Widget _buildPremiumThumbnail(String url) {
     if (url.isEmpty) return Container(color: Colors.grey[900]);
     return Image.network(url, fit: BoxFit.cover, errorBuilder: (c, e, s) => Container(color: Colors.grey[900]));
   }
 
-  Widget _buildSmartMediaViewer(CatalogItem item) {
+  // 📸 UPDATED: Now uses state variables `_localMediaPath` and `_currentMediaType` instead of hardcoding to the product item
+  Widget _buildSmartMediaViewer() {
     if (_localMediaPath == null || _localMediaPath!.isEmpty) {
       return const Center(child: CircularProgressIndicator(color: AppColors.textPrimary));
     }
 
-    bool isVideo = item.mediaType == 'video' || _localMediaPath!.toLowerCase().endsWith('.mp4');
+    bool isVideo = _currentMediaType == 'video' || _localMediaPath!.toLowerCase().endsWith('.mp4');
 
     if (isVideo) {
       if (_videoController != null && _videoController!.value.isInitialized) {
@@ -636,11 +720,9 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
       imageProvider = NetworkImage(_localMediaPath!);
     }
 
-    // 🌟 3D Gallery Suspension for Images (Padding fixed for 60/40 layout) 🌟
     return Stack(
       fit: StackFit.expand,
       children: [
-        // 1. BREATHING AMBIENT BACKGROUND
         AnimatedBuilder(
           animation: _imageAnimationController!,
           builder: (context, child) {
@@ -658,8 +740,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
             ],
           ),
         ),
-
-        // 2. 3D FLOATING FOREGROUND MEDIA
         AnimatedBuilder(
           animation: _imageAnimationController!,
           builder: (context, child) {
@@ -674,7 +754,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                 ..rotateY(cosWave * 0.015)
                 ..translate(0.0, wave * 15.0, 0.0),
               child: Padding(
-                // Notice the padding here is now perfectly centered for the 60% window!
                 padding: const EdgeInsets.all(64.0),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(16),

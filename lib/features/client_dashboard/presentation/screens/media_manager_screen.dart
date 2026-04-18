@@ -79,6 +79,58 @@ class _MediaManagerScreenState extends State<MediaManagerScreen> {
     }
   }
 
+  // 🗑️ NEW: Confirmation Dialog before permanent deletion
+  Future<void> _confirmDelete(String docId, String fileName) async {
+    showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.glassBackground,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: AppColors.glassBorder)),
+          title: Text("Delete Media?", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+          content: Text("Are you sure you want to permanently delete '$fileName'? It will be removed from the cloud.", style: GoogleFonts.poppins(color: Colors.white70)),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text("Cancel", style: GoogleFonts.poppins(color: Colors.white54))
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await _executeDelete(docId, fileName);
+              },
+              child: Text("Delete", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+            )
+          ],
+        )
+    );
+  }
+
+  // 🗑️ NEW: The actual deletion logic (Database + Cloud Storage)
+  Future<void> _executeDelete(String docId, String fileName) async {
+    if (_currentClientId == null) return;
+
+    try {
+      // 1. Delete from Firestore Database
+      await _firestore.collection('clients').doc(_currentClientId).collection('media').doc(docId).delete();
+
+      // 2. Delete the actual heavy file from Backblaze B2
+      await _b2Service.deleteMedia(fileName, _currentClientId!);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("File permanently deleted."), backgroundColor: Colors.orange)
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Error deleting file: $e"), backgroundColor: Colors.redAccent)
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -136,32 +188,59 @@ class _MediaManagerScreenState extends State<MediaManagerScreen> {
                   ),
                   itemCount: mediaDocs.length,
                   itemBuilder: (context, index) {
+                    final docId = mediaDocs[index].id; // 👈 NEW: Need document ID for deletion
                     final data = mediaDocs[index].data() as Map<String, dynamic>;
-                    final mediaUrl = data['url'] ?? '';
-                    final isVideo = data['type'] == 'video';
-                    final is3D = data['type'] == '3d'; // NEW
 
-                    return Container(
-                      decoration: BoxDecoration(
-                        color: AppColors.glassBackground,
-                        border: Border.all(color: AppColors.glassBorder),
-                        borderRadius: BorderRadius.circular(16),
-                        // Only show image preview if it is an actual image
-                        image: (!isVideo && !is3D && mediaUrl.isNotEmpty)
-                            ? DecorationImage(
-                            image: NetworkImage(mediaUrl),
-                            fit: BoxFit.cover,
-                            colorFilter: ColorFilter.mode(Colors.black.withOpacity(0.3), BlendMode.darken)
-                        )
-                            : null,
-                      ),
-                      child: Center(
-                        child: Icon(
-                          isVideo ? Icons.play_circle_fill : (is3D ? Icons.view_in_ar_rounded : Icons.image),
-                          color: Colors.white70,
-                          size: 48,
+                    final mediaUrl = data['url'] ?? '';
+                    final fileName = data['name'] ?? 'Unknown File'; // 👈 NEW: Need filename for B2 deletion
+                    final isVideo = data['type'] == 'video';
+                    final is3D = data['type'] == '3d';
+
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // The Media Card
+                        Container(
+                          decoration: BoxDecoration(
+                            color: AppColors.glassBackground,
+                            border: Border.all(color: AppColors.glassBorder),
+                            borderRadius: BorderRadius.circular(16),
+                            // Only show image preview if it is an actual image
+                            image: (!isVideo && !is3D && mediaUrl.isNotEmpty)
+                                ? DecorationImage(
+                                image: NetworkImage(mediaUrl),
+                                fit: BoxFit.cover,
+                                colorFilter: ColorFilter.mode(Colors.black.withOpacity(0.3), BlendMode.darken)
+                            )
+                                : null,
+                          ),
+                          child: Center(
+                            child: Icon(
+                              isVideo ? Icons.play_circle_fill : (is3D ? Icons.view_in_ar_rounded : Icons.image),
+                              color: Colors.white70,
+                              size: 48,
+                            ),
+                          ),
                         ),
-                      ),
+
+                        // 🗑️ NEW: The Red Delete Button
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: GestureDetector(
+                            onTap: () => _confirmDelete(docId, fileName),
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                  color: Colors.redAccent.withOpacity(0.9),
+                                  shape: BoxShape.circle,
+                                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 4)]
+                              ),
+                              child: const Icon(Icons.delete_outline, color: Colors.white, size: 20),
+                            ),
+                          ),
+                        )
+                      ],
                     );
                   },
                 );

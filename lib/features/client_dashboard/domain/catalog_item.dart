@@ -7,12 +7,17 @@ class CatalogItem {
   final String category;
   final double price;
   final String currency;
+
+  // Primary Media
   final String mediaUrl;
   final String mediaType;
+  final String thumbnailUrl; // 👈 NEW: Stores the cover image for videos/3D
+
+  final List<Map<String, dynamic>> gallery;
+
   final bool inStock;
   final String qrActionUrl;
 
-  // Analytics Tracking Counters!
   final int viewCount;
   final int qrScanCount;
 
@@ -25,6 +30,8 @@ class CatalogItem {
     this.currency = 'DZD',
     required this.mediaUrl,
     required this.mediaType,
+    this.thumbnailUrl = '', // Default to empty
+    this.gallery = const [],
     this.inStock = true,
     this.qrActionUrl = '',
     this.viewCount = 0,
@@ -33,7 +40,7 @@ class CatalogItem {
 
   Map<String, dynamic> toMap() {
     return {
-      'id': id, // The ID is saved directly inside the map for Option B
+      'id': id,
       'title': title,
       'description': description,
       'category': category,
@@ -41,6 +48,8 @@ class CatalogItem {
       'currency': currency,
       'mediaUrl': mediaUrl,
       'mediaType': mediaType,
+      'thumbnailUrl': thumbnailUrl, // 👈 Saved to Firestore
+      'gallery': gallery,
       'inStock': inStock,
       'qrActionUrl': qrActionUrl,
       'viewCount': viewCount,
@@ -49,11 +58,9 @@ class CatalogItem {
     };
   }
 
-  // ✅ OPTION B FIX: Removed "String documentId" from the parameters.
-  // Because it's an array, it doesn't have a Document ID. It pulls 'id' from the map.
   factory CatalogItem.fromMap(Map<String, dynamic> map) {
     return CatalogItem(
-      id: map['id'] ?? '', // 👈 Pulls the ID directly from the array map
+      id: map['id'] ?? '',
       title: map['title'] ?? '',
       description: map['description'] ?? '',
       category: map['category'] ?? 'Uncategorized',
@@ -61,6 +68,10 @@ class CatalogItem {
       currency: map['currency'] ?? 'DZD',
       mediaUrl: map['mediaUrl'] ?? '',
       mediaType: map['mediaType'] ?? 'image',
+      thumbnailUrl: map['thumbnailUrl'] ?? '', // 👈 Loaded from Firestore
+      gallery: map['gallery'] != null
+          ? List<Map<String, dynamic>>.from(map['gallery'])
+          : [],
       inStock: map['inStock'] ?? true,
       qrActionUrl: map['qrActionUrl'] ?? '',
       viewCount: map['viewCount'] ?? 0,

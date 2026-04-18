@@ -3,9 +3,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:file_picker/file_picker.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../features/auth/data/auth_service.dart';
 import '../../domain/catalog_item.dart';
+import '../../data/b2_storage_service.dart';
+import 'package:video_thumbnail/video_thumbnail.dart'; // 👈 NEW IMPORT
 
 class CatalogBuilderScreen extends StatefulWidget {
   const CatalogBuilderScreen({Key? key}) : super(key: key);
@@ -17,6 +20,7 @@ class CatalogBuilderScreen extends StatefulWidget {
 class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
   final AuthService _authService = AuthService();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final B2StorageService _b2Service = B2StorageService();
 
   String? _currentClientId;
   CatalogItem? _selectedItem;
@@ -28,10 +32,11 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
   final _priceController = TextEditingController();
   final _qrController = TextEditingController();
 
-  String _selectedMediaUrl = '';
-  String _selectedMediaType = 'image';
+  List<Map<String, dynamic>> _selectedGallery = [];
+
   bool _inStock = true;
   bool _isSaving = false;
+  bool _isUploadingMedia = false;
 
   @override
   void initState() {
@@ -52,8 +57,7 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
       _categoryController.clear();
       _priceController.clear();
       _qrController.clear();
-      _selectedMediaUrl = '';
-      _selectedMediaType = 'image';
+      _selectedGallery = [];
       _inStock = true;
     });
   }
@@ -66,55 +70,244 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
       _categoryController.text = item.category;
       _priceController.text = item.price > 0 ? item.price.toString() : '';
       _qrController.text = item.qrActionUrl;
-      _selectedMediaUrl = item.mediaUrl;
-      _selectedMediaType = item.mediaType;
       _inStock = item.inStock;
+
+      if (item.gallery.isNotEmpty) {
+        _selectedGallery = List<Map<String, dynamic>>.from(item.gallery);
+      } else if (item.mediaUrl.isNotEmpty) {
+        _selectedGallery = [{'url': item.mediaUrl, 'type': item.mediaType, 'thumbnailUrl': item.thumbnailUrl}];
+      } else {
+        _selectedGallery = [];
+      }
     });
   }
 
+  // 🚀 UPGRADED: Direct Upload with MAGIC AUTO-THUMBNAIL EXTRACTION
+  Future<void> _uploadDirectMedia(Function setDialogState, List<Map<String, dynamic>> tempGallery) async {
+    if (_currentClientId == null) return;
+
+    FilePickerResult? result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['jpg', 'jpeg', 'png', 'mp4', 'glb', 'gltf'],
+      withData: true,
+      allowMultiple: true,
+    );
+
+    if (result != null && result.files.isNotEmpty) {
+      setDialogState(() => _isUploadingMedia = true);
+
+      for (var file in result.files) {
+        if (file.bytes == null) continue;
+        final fileName = file.name;
+        final fileBytes = file.bytes!;
+
+        // 1. Upload original file to B2 Cloud
+        final String? downloadUrl = await _b2Service.uploadMedia(fileName, fileBytes, _currentClientId!);
+
+        if (downloadUrl != null) {
+          String fileType = 'image';
+          String autoThumbnailUrl = ''; // Will hold our auto-generated cover!
+
+          if (fileName.toLowerCase().endsWith('.mp4')) {
+            fileType = 'video';
+
+            // 🎬 2. MAGIC: Auto-Extract a frame from the video!
+            try {
+              print("🎬 Extracting frame from video...");
+              final uint8list = await VideoThumbnail.thumbnailData(
+                video: downloadUrl,
+                imageFormat: ImageFormat.JPEG,
+                maxWidth: 600, // Optimize size so the dashboard stays fast
+                quality: 75,
+              );
+
+              if (uint8list != null) {
+                // 3. Upload the extracted frame to B2 as a JPG!
+                String thumbName = 'thumb_${DateTime.now().millisecondsSinceEpoch}.jpg';
+                final String? uploadedThumb = await _b2Service.uploadMedia(thumbName, uint8list, _currentClientId!);
+                if (uploadedThumb != null) {
+                  autoThumbnailUrl = uploadedThumb;
+                  print("✅ Auto-Thumbnail Generated and Uploaded!");
+                }
+              }
+            } catch (e) {
+              print("⚠️ Auto-thumbnail failed, falling back to empty cover: $e");
+            }
+          } else if (fileName.toLowerCase().endsWith('.glb') || fileName.toLowerCase().endsWith('.gltf')) {
+            fileType = '3d';
+          }
+
+          // 4. Save metadata to Firestore Media Library
+          await _firestore.collection('clients').doc(_currentClientId).collection('media').add({
+            'url': downloadUrl,
+            'name': fileName,
+            'type': fileType,
+            'uploadedAt': FieldValue.serverTimestamp(),
+          });
+
+          // 5. Automatically add it to the Cinematic Strip (with the new cover!)
+          setDialogState(() {
+            tempGallery.add({
+              'url': downloadUrl,
+              'type': fileType,
+              'thumbnailUrl': autoThumbnailUrl // 👈 Injects the extracted frame!
+            });
+          });
+        }
+      }
+      setDialogState(() => _isUploadingMedia = false);
+    }
+  }
+
   Future<void> _openMediaPicker() async {
+    List<Map<String, dynamic>> tempGallery = List.from(_selectedGallery);
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: AppColors.glassBackground,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: AppColors.glassBorder)),
+              title: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("Select Media Gallery", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+                      Text("Select from library or upload new files.", style: GoogleFonts.poppins(color: Colors.white54, fontSize: 12)),
+                    ],
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: _isUploadingMedia ? null : () => _uploadDirectMedia(setDialogState, tempGallery),
+                    icon: _isUploadingMedia
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                        : const Icon(Icons.cloud_upload_rounded),
+                    label: Text(_isUploadingMedia ? "Uploading..." : "Upload New", style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.backgroundGradientStart, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                  )
+                ],
+              ),
+              content: SizedBox(
+                width: 700,
+                height: 450,
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: _firestore.collection('clients').doc(_currentClientId).collection('media').orderBy('uploadedAt', descending: true).snapshots(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                    final docs = snapshot.data!.docs;
+
+                    if (docs.isEmpty) return Center(child: Text("Your media library is empty. Click 'Upload New' to start.", style: GoogleFonts.poppins(color: Colors.white54)));
+
+                    return GridView.builder(
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, crossAxisSpacing: 16, mainAxisSpacing: 16),
+                      itemCount: docs.length,
+                      itemBuilder: (context, index) {
+                        final data = docs[index].data() as Map<String, dynamic>;
+                        final mediaType = data['type'];
+                        final url = data['url'];
+                        final isSelected = tempGallery.any((m) => m['url'] == url);
+
+                        return GestureDetector(
+                          onTap: () {
+                            setDialogState(() {
+                              if (isSelected) {
+                                tempGallery.removeWhere((m) => m['url'] == url);
+                              } else {
+                                tempGallery.add({'url': url, 'type': mediaType, 'thumbnailUrl': ''});
+                              }
+                            });
+                          },
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.black45,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: isSelected ? AppColors.backgroundGradientStart : Colors.white24, width: isSelected ? 4 : 1),
+                              image: mediaType == 'image' ? DecorationImage(image: NetworkImage(url), fit: BoxFit.cover, colorFilter: isSelected ? null : ColorFilter.mode(Colors.black.withOpacity(0.3), BlendMode.darken)) : null,
+                            ),
+                            child: Stack(
+                              children: [
+                                Center(
+                                  child: mediaType == 'video' ? const Icon(Icons.play_circle_fill, color: Colors.white70, size: 32)
+                                      : (mediaType == '3d' ? const Icon(Icons.view_in_ar_rounded, color: Colors.white70, size: 32) : null),
+                                ),
+                                if (isSelected) const Positioned(top: 8, right: 8, child: Icon(Icons.check_circle, color: AppColors.backgroundGradientStart, size: 28)),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: Text("Cancel", style: GoogleFonts.poppins(color: Colors.white54))),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() => _selectedGallery = tempGallery);
+                    Navigator.pop(context);
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.backgroundGradientStart),
+                  child: Text("Confirm Gallery (${tempGallery.length})", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+                )
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // 🖼️ NEW: Allows assigning a specific Image from the Media library to act as the cover for a Video
+  Future<void> _selectCoverForVideo(int galleryIndex) async {
     await showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
           backgroundColor: AppColors.glassBackground,
-          title: Text("Select Media", style: GoogleFonts.poppins(color: Colors.white)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: AppColors.glassBorder)),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text("Set Video Cover Image", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+              Text("Select an image to display before the video plays.", style: GoogleFonts.poppins(color: Colors.white54, fontSize: 12)),
+            ],
+          ),
           content: SizedBox(
-            width: 600,
-            height: 400,
+            width: 700,
+            height: 450,
             child: StreamBuilder<QuerySnapshot>(
-              stream: _firestore.collection('clients').doc(_currentClientId).collection('media').orderBy('uploadedAt', descending: true).snapshots(),
+              // 👈 Notice we filter to ONLY show images for the cover
+              stream: _firestore.collection('clients').doc(_currentClientId).collection('media').where('type', isEqualTo: 'image').orderBy('uploadedAt', descending: true).snapshots(),
               builder: (context, snapshot) {
                 if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
                 final docs = snapshot.data!.docs;
 
+                if (docs.isEmpty) return Center(child: Text("No images in library. Upload an image first to use as a cover.", style: GoogleFonts.poppins(color: Colors.white54)));
+
                 return GridView.builder(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 12, mainAxisSpacing: 12),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, crossAxisSpacing: 16, mainAxisSpacing: 16),
                   itemCount: docs.length,
                   itemBuilder: (context, index) {
                     final data = docs[index].data() as Map<String, dynamic>;
-                    final mediaType = data['type'];
                     final url = data['url'];
 
                     return GestureDetector(
                       onTap: () {
                         setState(() {
-                          _selectedMediaUrl = url;
-                          _selectedMediaType = mediaType;
+                          _selectedGallery[galleryIndex]['thumbnailUrl'] = url;
                         });
                         Navigator.pop(context);
                       },
                       child: Container(
                         decoration: BoxDecoration(
                           color: Colors.black45,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: _selectedMediaUrl == url ? AppColors.backgroundGradientStart : Colors.transparent, width: 3),
-                          image: mediaType == 'image' ? DecorationImage(image: NetworkImage(url), fit: BoxFit.cover) : null,
-                        ),
-                        child: Center(
-                          child: mediaType == 'video'
-                              ? const Icon(Icons.play_circle_fill, color: Colors.white70, size: 32)
-                              : (mediaType == '3d' ? const Icon(Icons.view_in_ar_rounded, color: Colors.white, size: 32) : null),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white24, width: 1),
+                          image: DecorationImage(image: NetworkImage(url), fit: BoxFit.cover),
                         ),
                       ),
                     );
@@ -123,16 +316,17 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
               },
             ),
           ),
-          actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text("Cancel", style: GoogleFonts.poppins(color: Colors.white54)))],
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: Text("Cancel", style: GoogleFonts.poppins(color: Colors.white54))),
+          ],
         );
       },
     );
   }
 
-  // ✅ WINDOWS SDK FIX: Replaced buggy runTransaction with standard get() and update()
   Future<void> _saveCatalogItem() async {
-    if (!_formKey.currentState!.validate() || _selectedMediaUrl.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Title and Media are required."), backgroundColor: Colors.redAccent));
+    if (!_formKey.currentState!.validate() || _selectedGallery.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Title and at least 1 Media item are required."), backgroundColor: Colors.redAccent));
       return;
     }
 
@@ -141,14 +335,18 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
     final priceText = _priceController.text.trim();
     final double parsedPrice = priceText.isEmpty ? 0.0 : (double.tryParse(priceText) ?? 0.0);
 
+    final primaryMedia = _selectedGallery.first;
+
     final Map<String, dynamic> itemData = {
       'title': _titleController.text.trim(),
       'description': _descController.text.trim(),
       'category': _categoryController.text.trim().isEmpty ? 'Uncategorized' : _categoryController.text.trim(),
       'price': parsedPrice,
       'currency': 'DZD',
-      'mediaUrl': _selectedMediaUrl,
-      'mediaType': _selectedMediaType,
+      'mediaUrl': primaryMedia['url'],
+      'mediaType': primaryMedia['type'],
+      'thumbnailUrl': primaryMedia['thumbnailUrl'] ?? '', // 👈 Saved as primary cover
+      'gallery': _selectedGallery,
       'inStock': _inStock,
       'qrActionUrl': _qrController.text.trim(),
       'updatedAt': DateTime.now().toIso8601String(),
@@ -157,14 +355,12 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
     try {
       final docRef = _firestore.collection('clients').doc(_currentClientId);
 
-      // 1. Fetch document normally
       final snapshot = await docRef.get();
       if (!snapshot.exists) throw Exception("Client document missing!");
 
       final data = snapshot.data() as Map<String, dynamic>;
       List<dynamic> currentCatalog = data['catalog'] ?? [];
 
-      // 2. Modify array locally
       if (_selectedItem == null) {
         itemData['id'] = _firestore.collection('dummy').doc().id;
         itemData['viewCount'] = 0;
@@ -183,7 +379,6 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
         }
       }
 
-      // 3. Update document normally
       await docRef.update({'catalog': currentCatalog});
 
       _clearForm();
@@ -195,22 +390,18 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
     setState(() => _isSaving = false);
   }
 
-  // ✅ WINDOWS SDK FIX: Replaced buggy runTransaction with standard get() and update()
   Future<void> _deleteItem(String id) async {
     try {
       final docRef = _firestore.collection('clients').doc(_currentClientId);
 
-      // 1. Fetch document normally
       final snapshot = await docRef.get();
       if (!snapshot.exists) return;
 
       final data = snapshot.data() as Map<String, dynamic>;
       List<dynamic> currentCatalog = data['catalog'] ?? [];
 
-      // 2. Modify array locally
       currentCatalog.removeWhere((item) => item['id'] == id);
 
-      // 3. Update document normally
       await docRef.update({'catalog': currentCatalog});
 
       if (_selectedItem?.id == id) _clearForm();
@@ -296,13 +487,16 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
           itemBuilder: (context, index) {
             final item = catalogItems[index];
 
+            // 👈 Uses the new thumbnailUrl if it's a video!
+            String avatarUrl = item.mediaType == 'image' ? item.mediaUrl : item.thumbnailUrl;
+
             return ListTile(
               leading: CircleAvatar(
                 backgroundColor: Colors.black45,
-                backgroundImage: item.mediaType == 'image' ? NetworkImage(item.mediaUrl) : null,
-                child: item.mediaType == 'video'
+                backgroundImage: avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+                child: item.mediaType == 'video' && avatarUrl.isEmpty
                     ? const Icon(Icons.play_arrow, color: Colors.white)
-                    : (item.mediaType == '3d' ? const Icon(Icons.view_in_ar, color: Colors.white) : null),
+                    : (item.mediaType == '3d' && avatarUrl.isEmpty ? const Icon(Icons.view_in_ar, color: Colors.white) : null),
               ),
               title: Text(item.title, style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
               subtitle: Text(item.price > 0 ? "${item.category} • ${item.price} DZD" : item.category, style: GoogleFonts.poppins(color: Colors.white54, fontSize: 12)),
@@ -342,79 +536,168 @@ class _CatalogBuilderScreenState extends State<CatalogBuilderScreen> {
             const SizedBox(height: 16),
             _buildTextField(_qrController, "Online Store Link (Optional)", isUrl: true),
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 32),
+
+            Text("Cinematic Media Gallery *", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+            const SizedBox(height: 4),
+            Text("Select multiple items. Drag left/right to reorder. The first item acts as the main thumbnail.", style: GoogleFonts.poppins(color: Colors.white54, fontSize: 12)),
+            const SizedBox(height: 16),
+
+            SizedBox(
+              height: 120, // Height of the cinematic strip
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: _openMediaPicker,
+                    child: Container(
+                      width: 120,
+                      decoration: BoxDecoration(
+                        color: Colors.black26,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white24, width: 2, style: BorderStyle.solid),
+                      ),
+                      child: const Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.add_photo_alternate_rounded, color: Colors.white54, size: 36),
+                          SizedBox(height: 8),
+                          Text("Add Media", style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold))
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+
+                  Expanded(
+                    child: ReorderableListView(
+                      scrollDirection: Axis.horizontal,
+                      onReorder: (oldIndex, newIndex) {
+                        setState(() {
+                          if (oldIndex < newIndex) newIndex -= 1;
+                          final item = _selectedGallery.removeAt(oldIndex);
+                          _selectedGallery.insert(newIndex, item);
+                        });
+                      },
+                      children: [
+                        for (int i = 0; i < _selectedGallery.length; i++)
+                          _buildGalleryThumbnail(_selectedGallery[i], i, key: ValueKey('${_selectedGallery[i]['url']}_$i')),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 32),
             const Divider(color: Colors.white24),
             const SizedBox(height: 24),
 
             Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text("Product Media *", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-                    GestureDetector(
-                      onTap: _openMediaPicker,
-                      child: Container(
-                        width: 150,
-                        height: 150,
-                        decoration: BoxDecoration(
-                          color: Colors.black26,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.white24),
-                          image: _selectedMediaUrl.isNotEmpty && _selectedMediaType == 'image'
-                              ? DecorationImage(image: NetworkImage(_selectedMediaUrl), fit: BoxFit.cover)
-                              : null,
-                        ),
-                        child: _selectedMediaUrl.isEmpty
-                            ? const Center(child: Icon(Icons.add_photo_alternate, color: Colors.white54, size: 40))
-                            : (_selectedMediaType == '3d'
-                            ? const Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.view_in_ar_rounded, color: Colors.white70, size: 50),
-                              SizedBox(height: 8),
-                              Text("3D Model Selected", style: TextStyle(color: Colors.white54, fontSize: 10)),
-                            ],
-                          ),
-                        )
-                            : (_selectedMediaType == 'video' ? const Center(child: Icon(Icons.play_circle_fill, color: Colors.white, size: 50)) : null)),
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(width: 32),
-
                 Expanded(
-                  child: Column(
-                    children: [
-                      SwitchListTile(
-                        title: Text("In Stock", style: GoogleFonts.poppins(color: Colors.white)),
-                        subtitle: Text("If false, item will show as 'Sold Out' on Kiosk.", style: GoogleFonts.poppins(color: Colors.white54, fontSize: 12)),
-                        value: _inStock,
-                        activeColor: AppColors.backgroundGradientStart,
-                        onChanged: (val) => setState(() => _inStock = val),
-                      ),
-                      const SizedBox(height: 32),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 50,
-                        child: ElevatedButton(
-                          onPressed: _isSaving ? null : _saveCatalogItem,
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.green, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-                          child: _isSaving ? const CircularProgressIndicator(color: Colors.white) : Text("Save Product", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                        ),
-                      )
-                    ],
+                  child: SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text("In Stock", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+                    subtitle: Text("If false, item will show as 'Sold Out' on Kiosk.", style: GoogleFonts.poppins(color: Colors.white54, fontSize: 12)),
+                    value: _inStock,
+                    activeColor: AppColors.backgroundGradientStart,
+                    onChanged: (val) => setState(() => _inStock = val),
+                  ),
+                ),
+                const SizedBox(width: 24),
+                Expanded(
+                  child: SizedBox(
+                    height: 55,
+                    child: ElevatedButton.icon(
+                      onPressed: _isSaving ? null : _saveCatalogItem,
+                      icon: _isSaving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white)) : const Icon(Icons.check_circle),
+                      label: Text(_isSaving ? "Saving..." : "Save Product", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                    ),
                   ),
                 )
               ],
             )
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildGalleryThumbnail(Map<String, dynamic> media, int index, {required Key key}) {
+    bool isPrimary = index == 0;
+
+    // 📸 Pull the thumbnail URL if it exists
+    String? thumbUrl = media['thumbnailUrl'];
+    String? bgImage = media['type'] == 'image' ? media['url'] : (thumbUrl != null && thumbUrl.isNotEmpty ? thumbUrl : null);
+
+    return Container(
+      key: key,
+      width: 120,
+      margin: const EdgeInsets.only(right: 16),
+      decoration: BoxDecoration(
+        color: Colors.black45,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: isPrimary ? AppColors.backgroundGradientStart : Colors.white24, width: isPrimary ? 2 : 1),
+        // Render the image or the assigned cover
+        image: bgImage != null ? DecorationImage(image: NetworkImage(bgImage), fit: BoxFit.cover, colorFilter: ColorFilter.mode(Colors.black.withOpacity(0.3), BlendMode.darken)) : null,
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (media['type'] == 'video')
+            const Center(child: Icon(Icons.play_circle_fill, color: Colors.white, size: 36)),
+          if (media['type'] == '3d')
+            const Center(child: Icon(Icons.view_in_ar_rounded, color: Colors.white, size: 36)),
+
+          // 🖼️ THE NEW "SET COVER" BUTTON FOR VIDEOS/3D
+          if (media['type'] != 'image')
+            Positioned(
+              top: 4, left: 4,
+              child: GestureDetector(
+                onTap: () => _selectCoverForVideo(index),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.white24)),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.image, color: Colors.white, size: 10),
+                      SizedBox(width: 4),
+                      Text("Cover", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+          if (isPrimary)
+            Positioned(
+              bottom: 0, left: 0, right: 0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                decoration: const BoxDecoration(
+                    color: AppColors.backgroundGradientStart,
+                    borderRadius: BorderRadius.only(bottomLeft: Radius.circular(10), bottomRight: Radius.circular(10))
+                ),
+                child: const Text("⭐ Main", textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+              ),
+            ),
+
+          Positioned(
+            top: 4, right: 4,
+            child: GestureDetector(
+              onTap: () {
+                setState(() => _selectedGallery.removeAt(index));
+              },
+              child: Container(
+                padding: const EdgeInsets.all(2),
+                decoration: const BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
+                child: const Icon(Icons.close, color: Colors.white, size: 14),
+              ),
+            ),
+          )
+        ],
       ),
     );
   }

@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:minio/minio.dart';
 
 /// Documentation:
-/// This service handles uploading heavy media (Images/MP4s) directly to Backblaze B2.
+/// This service handles uploading and deleting heavy media directly to/from Backblaze B2.
 class B2StorageService {
   // Initialize the Minio client with your exact B2 S3 credentials
   final Minio _minio = Minio(
@@ -37,6 +37,24 @@ class B2StorageService {
     } catch (e) {
       print('Backblaze Upload Error: $e');
       return null;
+    }
+  }
+
+  /// Documentation:
+  /// 🗑️ Permanently deletes a file from Backblaze B2 to save server costs!
+  Future<bool> deleteMedia(String fileName, String clientId) async {
+    try {
+      // Reconstruct the exact path used during upload
+      final String safePath = 'signage_media/$clientId/$fileName';
+
+      // Tell Minio to permanently delete the object from the bucket
+      await _minio.removeObject(_bucketName, safePath);
+
+      print('✅ Successfully deleted $fileName from Backblaze B2');
+      return true;
+    } catch (e) {
+      print('❌ Backblaze Delete Error: $e');
+      return false;
     }
   }
 }
