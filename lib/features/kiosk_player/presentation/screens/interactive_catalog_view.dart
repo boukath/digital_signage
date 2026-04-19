@@ -8,10 +8,10 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:video_player/video_player.dart';
-
 import '../../../../core/constants/app_colors.dart';
 import '../../data/local_cache_service.dart';
 import '../../../client_dashboard/domain/catalog_item.dart';
+import 'package:digital_signage/core/utils/kiosk_scroll_physics.dart';
 
 class InteractiveCatalogView extends StatefulWidget {
   final String clientId;
@@ -136,7 +136,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
     await _videoController!.initialize();
     _videoController!.setLooping(true);
 
-    // 👇 FIXED: SET VOLUME TO 1.0 SO IT PLAYS SOUND BY DEFAULT
     _videoController!.setVolume(1.0);
 
     _videoController!.play();
@@ -218,9 +217,9 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
 
             final data = snapshot.data!.data() as Map<String, dynamic>;
             final List<dynamic> rawCatalog = data['catalog'] ?? [];
-            final List<dynamic> rawDepartments = data['departments'] ?? []; // 👈 NEW
+            final List<dynamic> rawDepartments = data['departments'] ?? [];
 
-            // 👈 NEW: Map Department Name -> Background Image URL
+            // Map Department Name -> Background Image URL
             final Map<String, String> departmentBackgrounds = {};
             for (var dept in rawDepartments) {
               departmentBackgrounds[dept['name']] = dept['imageUrl'] ?? '';
@@ -244,7 +243,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
               switchInCurve: Curves.easeOutCubic,
               switchOutCurve: Curves.easeInCubic,
               child: _selectedDepartment == null
-              // 👇 Pass the new backgrounds map here
                   ? _buildLevel1Lookbook(groupedByDept, departmentBackgrounds)
                   : (_selectedProduct == null
                   ? _buildLevel2Aisle(groupedByDept[_selectedDepartment]!)
@@ -260,7 +258,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
   // LEVEL 1: THE LOOKBOOK (Vertical Parallax Carousel)
   // =========================================================================
 
-  // 👇 Added the map to the parameters here
   Widget _buildLevel1Lookbook(Map<String, List<CatalogItem>> groupedByDept, Map<String, String> departmentBackgrounds) {
     final departments = groupedByDept.keys.toList();
 
@@ -268,17 +265,14 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
       children: [
         PageView.builder(
           controller: _deptPageController,
-          scrollDirection: Axis.vertical, // Vertical scrolling feels more premium here
+          scrollDirection: Axis.vertical,
+          physics: const KioskPagePhysics(),
           itemCount: departments.length,
           itemBuilder: (context, index) {
             final deptName = departments[index];
             final deptItems = groupedByDept[deptName]!;
 
-            // Use the first item's image as the Fallback Hero cover
             final previewItem = deptItems.first;
-
-            // 🌟 THE MAGIC HAPPENS HERE 🌟
-            // Try to get the dedicated cover. If it doesn't exist, fallback to the old product image!
             final String defaultBg = previewItem.mediaType == 'image' ? previewItem.mediaUrl : previewItem.thumbnailUrl;
 
             final String bgUrl = departmentBackgrounds[deptName]?.isNotEmpty == true
@@ -290,7 +284,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  // --- PARALLAX BACKGROUND ---
                   AnimatedBuilder(
                     animation: _deptPageController,
                     builder: (context, child) {
@@ -299,18 +292,15 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                         pageOffset = _deptPageController.page! - index;
                       }
                       return Transform.translate(
-                        // Shift the image vertically based on scroll position
                         offset: Offset(0, pageOffset * MediaQuery.of(context).size.height * 0.4),
-                        child: Image.network(
-                          bgUrl,
+                        child: CachedKioskImage(
+                          url: bgUrl,
                           fit: BoxFit.cover,
-                          errorBuilder: (c, e, s) => Container(color: Colors.grey[900]),
                         ),
                       );
                     },
                   ),
 
-                  // --- DARK GRADIENT OVERLAY ---
                   Container(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
@@ -321,7 +311,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                     ),
                   ),
 
-                  // --- MASSIVE TYPOGRAPHY ---
                   Align(
                     alignment: Alignment.center,
                     child: Column(
@@ -359,7 +348,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
           },
         ),
 
-        // Custom Scroll Indicator
         Positioned(
           right: 48,
           top: 0,
@@ -368,11 +356,37 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.keyboard_arrow_up, color: Colors.white54),
+                GestureDetector(
+                  onTap: () {
+                    _userInteracted();
+                    _deptPageController.previousPage(
+                      duration: const Duration(milliseconds: 800),
+                      curve: Curves.easeInOutCubic,
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(24),
+                    color: Colors.transparent,
+                    child: const Icon(Icons.keyboard_arrow_up, color: Colors.white, size: 48),
+                  ),
+                ),
                 const SizedBox(height: 8),
-                const Text("SWIPE", style: TextStyle(color: Colors.white54, letterSpacing: 4, fontSize: 10)),
+                const Text("SWIPE OR TAP", style: TextStyle(color: Colors.white54, letterSpacing: 4, fontSize: 10)),
                 const SizedBox(height: 8),
-                const Icon(Icons.keyboard_arrow_down, color: Colors.white54),
+                GestureDetector(
+                  onTap: () {
+                    _userInteracted();
+                    _deptPageController.nextPage(
+                      duration: const Duration(milliseconds: 800),
+                      curve: Curves.easeInOutCubic,
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(24),
+                    color: Colors.transparent,
+                    child: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 48),
+                  ),
+                ),
               ],
             ),
           ),
@@ -385,11 +399,9 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
   // LEVEL 2: THE AISLE (Horizontal Dynamic Carousel)
   // =========================================================================
   Widget _buildLevel2Aisle(List<CatalogItem> deptItems) {
-    // Extract unique categories within this department for the filter chips
     final Set<String> categories = {"All"};
     categories.addAll(deptItems.map((e) => e.category));
 
-    // Apply the filter
     final List<CatalogItem> displayItems = _selectedCategoryFilter == null || _selectedCategoryFilter == "All"
         ? deptItems
         : deptItems.where((i) => i.category == _selectedCategoryFilter).toList();
@@ -433,7 +445,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                   ],
                 ),
 
-                // --- CATEGORY FILTER CHIPS ---
                 Row(
                   children: categories.map((cat) {
                     bool isSelected = (_selectedCategoryFilter ?? "All") == cat;
@@ -474,93 +485,172 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
           Expanded(
             child: displayItems.isEmpty
                 ? const Center(child: Text("No items match this filter.", style: TextStyle(color: Colors.white54, fontSize: 18)))
-                : PageView.builder(
-              controller: _aislePageController,
-              itemCount: displayItems.length,
-              itemBuilder: (context, index) {
-                final item = displayItems[index];
-                final bgUrl = item.mediaType == 'image' ? item.mediaUrl : item.thumbnailUrl;
+                : Stack(
+              children: [
+                PageView.builder(
+                  controller: _aislePageController,
+                  physics: const KioskPagePhysics(),
+                  itemCount: displayItems.length,
+                  itemBuilder: (context, index) {
+                    final item = displayItems[index];
+                    final bgUrl = item.mediaType == 'image' ? item.mediaUrl : item.thumbnailUrl;
 
-                return AnimatedBuilder(
-                  animation: _aislePageController,
-                  builder: (context, child) {
-                    double value = 1.0;
-                    if (_aislePageController.position.haveDimensions) {
-                      value = _aislePageController.page! - index;
-                      value = (1 - (value.abs() * 0.3)).clamp(0.0, 1.0); // Scale down side items
-                    }
+                    return AnimatedBuilder(
+                      animation: _aislePageController,
+                      builder: (context, child) {
+                        double value = 1.0;
+                        if (_aislePageController.position.haveDimensions) {
+                          value = _aislePageController.page! - index;
+                          value = (1 - (value.abs() * 0.3)).clamp(0.0, 1.0);
+                        }
 
-                    // The active item is fully opaque, side items are faded
-                    final opacity = (value - 0.7) / 0.3;
+                        final opacity = (value - 0.7) / 0.3;
 
-                    return Center(
-                      child: Transform.scale(
-                        scale: Curves.easeOut.transform(value),
-                        child: Opacity(
-                          opacity: opacity.clamp(0.3, 1.0),
-                          child: GestureDetector(
-                            onTap: () => _openProduct(item),
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(24),
-                                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 30, offset: const Offset(0, 20))],
-                              ),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(24),
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    Image.network(bgUrl, fit: BoxFit.cover, errorBuilder: (c,e,s) => Container(color: Colors.grey[800])),
-
-                                    // Gradient at bottom for text
-                                    Container(
-                                      decoration: BoxDecoration(
-                                          gradient: LinearGradient(
-                                            colors: [Colors.transparent, Colors.black.withOpacity(0.9)],
-                                            begin: Alignment.center,
-                                            end: Alignment.bottomCenter,
-                                          )
-                                      ),
+                        return Center(
+                          child: Transform.scale(
+                            scale: Curves.easeOut.transform(value),
+                            child: Opacity(
+                              opacity: opacity.clamp(0.3, 1.0),
+                              // 🚀 UPGRADE 1: RepaintBoundary saves Kiosk GPU power during swipes!
+                              child: RepaintBoundary(
+                                child: GestureDetector(
+                                  onTap: () => _openProduct(item),
+                                  child: Container(
+                                    margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(24),
+                                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 30, offset: const Offset(0, 20))],
                                     ),
-
-                                    // Item Info
-                                    Positioned(
-                                      bottom: 32,
-                                      left: 32,
-                                      right: 32,
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(24),
+                                      child: Stack(
+                                        fit: StackFit.expand,
                                         children: [
-                                          Text(item.title, style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
-                                          const SizedBox(height: 8),
-                                          Text("${item.price.toStringAsFixed(2)} ${item.currency}", style: const TextStyle(color: Colors.white70, fontSize: 18)),
+                                          CachedKioskImage(url: bgUrl, fit: BoxFit.cover),
+
+                                          Container(
+                                            decoration: BoxDecoration(
+                                                gradient: LinearGradient(
+                                                  colors: [Colors.transparent, Colors.black.withOpacity(0.9)],
+                                                  begin: Alignment.center,
+                                                  end: Alignment.bottomCenter,
+                                                )
+                                            ),
+                                          ),
+
+                                          Positioned(
+                                            bottom: 32,
+                                            left: 32,
+                                            right: 32,
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(item.title, style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+                                                const SizedBox(height: 8),
+                                                Text("${item.price.toStringAsFixed(2)} ${item.currency}", style: const TextStyle(color: Colors.white70, fontSize: 18)),
+                                              ],
+                                            ),
+                                          ),
+
+                                          if (item.mediaType != 'image')
+                                            Positioned(
+                                              top: 24,
+                                              right: 24,
+                                              child: Container(
+                                                padding: const EdgeInsets.all(12),
+                                                decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                                                child: Icon(item.mediaType == 'video' ? Icons.play_arrow : Icons.view_in_ar, color: Colors.white),
+                                              ),
+                                            )
                                         ],
                                       ),
                                     ),
-
-                                    // Video/3D Badge
-                                    if (item.mediaType != 'image')
-                                      Positioned(
-                                        top: 24,
-                                        right: 24,
-                                        child: Container(
-                                          padding: const EdgeInsets.all(12),
-                                          decoration: BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                                          child: Icon(item.mediaType == 'video' ? Icons.play_arrow : Icons.view_in_ar, color: Colors.white),
-                                        ),
-                                      )
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                      ),
+                        );
+                      },
                     );
                   },
-                );
-              },
+                ),
+
+                // 2. THE PREMIUM "DYNAMIC ISLAND" SWIPE BAR
+                Positioned(
+                  bottom: 40,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: GestureDetector(
+                      onTap: () {
+                        _userInteracted();
+                      },
+                      onHorizontalDragEnd: (details) {
+                        _userInteracted();
+                        if (details.primaryVelocity == null) return;
+
+                        if (details.primaryVelocity! < -200) {
+                          _aislePageController.nextPage(duration: const Duration(milliseconds: 600), curve: Curves.easeOutCubic);
+                        } else if (details.primaryVelocity! > 200) {
+                          _aislePageController.previousPage(duration: const Duration(milliseconds: 600), curve: Curves.easeOutCubic);
+                        }
+                      },
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(50),
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                          child: Container(
+                            height: 64,
+                            width: 280,
+                            decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(50),
+                                border: Border.all(color: Colors.white.withOpacity(0.25), width: 1.5),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.15),
+                                    blurRadius: 20,
+                                    spreadRadius: 2,
+                                  )
+                                ]
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white70, size: 16),
+                                  onPressed: () {
+                                    _userInteracted();
+                                    _aislePageController.previousPage(duration: const Duration(milliseconds: 600), curve: Curves.easeOutCubic);
+                                  },
+                                ),
+
+                                const Text(
+                                  "SWIPE",
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 6,
+                                  ),
+                                ),
+
+                                IconButton(
+                                  icon: const Icon(Icons.arrow_forward_ios, color: Colors.white70, size: 16),
+                                  onPressed: () {
+                                    _userInteracted();
+                                    _aislePageController.nextPage(duration: const Duration(milliseconds: 600), curve: Curves.easeOutCubic);
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -579,7 +669,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
       children: [
         Row(
           children: [
-            // LEFT 60%: Immersive Media Viewer
             Expanded(
               flex: 6,
               child: Stack(
@@ -593,7 +682,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                     ),
                   ),
 
-                  // Shadow blending into text panel
                   Align(
                     alignment: Alignment.centerRight,
                     child: Container(
@@ -608,7 +696,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                     ),
                   ),
 
-                  // Cinematic Thumbnail Strip
                   if (activeGallery.length > 1)
                     AnimatedOpacity(
                       opacity: _showUI ? 1.0 : 0.0,
@@ -639,18 +726,29 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                                   width: 60,
                                   height: 80,
                                   decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(color: isSelected ? Colors.white : Colors.white24, width: isSelected ? 2 : 1),
-                                      boxShadow: isSelected ? [BoxShadow(color: Colors.white.withOpacity(0.2), blurRadius: 10)] : [],
-                                      image: bgUrl != null ? DecorationImage(
-                                        image: NetworkImage(bgUrl),
-                                        fit: BoxFit.cover,
-                                        colorFilter: isSelected ? null : ColorFilter.mode(Colors.black.withOpacity(0.4), BlendMode.darken),
-                                      ) : null
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: isSelected ? Colors.white : Colors.white24, width: isSelected ? 2 : 1),
+                                    boxShadow: isSelected ? [BoxShadow(color: Colors.white.withOpacity(0.2), blurRadius: 10)] : [],
                                   ),
-                                  child: media['type'] == 'video'
-                                      ? const Center(child: Icon(Icons.play_circle_fill, color: Colors.white, size: 24))
-                                      : (media['type'] == '3d' ? const Center(child: Icon(Icons.view_in_ar, color: Colors.white, size: 24)) : null),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(10),
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        if (bgUrl != null)
+                                          CachedKioskImage(url: bgUrl, fit: BoxFit.cover),
+
+                                        if (!isSelected)
+                                          Container(color: Colors.black.withOpacity(0.4)),
+
+                                        if (media['type'] == 'video')
+                                          const Center(child: Icon(Icons.play_circle_fill, color: Colors.white, size: 24)),
+
+                                        if (media['type'] == '3d')
+                                          const Center(child: Icon(Icons.view_in_ar, color: Colors.white, size: 24)),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               );
                             }),
@@ -662,7 +760,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
               ),
             ),
 
-            // RIGHT 40%: The Editorial Typography Column
             Expanded(
               flex: 4,
               child: Container(
@@ -740,7 +837,6 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
           ],
         ),
 
-        // BACK BUTTON OVERLAY
         AnimatedOpacity(
           opacity: _showUI ? 1.0 : 0.0,
           duration: const Duration(milliseconds: 500),
@@ -810,13 +906,11 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                     child: Icon(value.isPlaying ? Icons.pause : Icons.play_arrow, color: AppColors.textPrimary, size: 24),
                   ),
                 ),
-                const SizedBox(width: 12), // 👈 Adjusted spacing
+                const SizedBox(width: 12),
 
-                // 👇 VOLUME TOGGLE BUTTON
                 GestureDetector(
                   onTap: () {
                     _userInteracted();
-                    // If volume is 0.0 (muted), turn it up to 1.0. If not, mute it.
                     bool isMuted = value.volume == 0.0;
                     _videoController!.setVolume(isMuted ? 1.0 : 0.0);
                   },
@@ -886,10 +980,8 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
                 child: VideoPlayer(_videoController!),
               ),
             ),
-            BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 80.0, sigmaY: 80.0),
-              child: Container(color: Colors.black.withOpacity(0.6)),
-            ),
+            // 🚀 UPGRADE 2: Replaced heavy BackdropFilter with sleek cinematic shadow
+            Container(color: Colors.black.withOpacity(0.85)),
             FittedBox(
               fit: BoxFit.contain,
               child: SizedBox(
@@ -925,10 +1017,8 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
             fit: StackFit.expand,
             children: [
               Image(image: imageProvider, fit: BoxFit.cover),
-              BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 80.0, sigmaY: 80.0),
-                child: Container(color: Colors.black.withOpacity(0.6)),
-              ),
+              // 🚀 UPGRADE 3: Replaced heavy BackdropFilter with sleek cinematic shadow
+              Container(color: Colors.black.withOpacity(0.85)),
             ],
           ),
         ),
@@ -959,6 +1049,68 @@ class _InteractiveCatalogViewState extends State<InteractiveCatalogView> with Ti
           },
         ),
       ],
+    );
+  }
+}
+
+// =========================================================================
+// 🌟 NEW: CACHED KIOSK IMAGE WIDGET
+// Automatically intercepts network URLs, downloads them to the Windows
+// hard drive once, and renders them offline instantly forever after!
+// =========================================================================
+class CachedKioskImage extends StatefulWidget {
+  final String url;
+  final BoxFit fit;
+
+  const CachedKioskImage({Key? key, required this.url, this.fit = BoxFit.cover}) : super(key: key);
+
+  @override
+  State<CachedKioskImage> createState() => _CachedKioskImageState();
+}
+
+class _CachedKioskImageState extends State<CachedKioskImage> {
+  final LocalCacheService _cacheService = LocalCacheService();
+  String? _localPath;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchAndCacheImage();
+  }
+
+  @override
+  void didUpdateWidget(CachedKioskImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) {
+      _localPath = null;
+      _fetchAndCacheImage();
+    }
+  }
+
+  Future<void> _fetchAndCacheImage() async {
+    if (widget.url.isEmpty) return;
+    try {
+      final path = await _cacheService.getCachedMediaPath(widget.url);
+      if (mounted) {
+        setState(() => _localPath = path);
+      }
+    } catch (e) {
+      debugPrint("Failed to cache UI image: $e");
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_localPath == null) {
+      return Container(color: Colors.grey[900]);
+    }
+
+    return Image.file(
+      File(_localPath!),
+      fit: widget.fit,
+      // 🚀 UPGRADE 4: Drastically reduces RAM usage by shrinking the memory footprint of large images
+      cacheHeight: 1080,
+      errorBuilder: (context, error, stackTrace) => Container(color: Colors.grey[900]),
     );
   }
 }
