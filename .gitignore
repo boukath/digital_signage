@@ -12,34 +12,97 @@
 .swiftpm/
 migrate_working_dir/
 
-# IntelliJ related
+# IntelliJ / Android Studio related
 *.iml
 *.ipr
 *.iws
 .idea/
 
+# VS Code
 # The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
+# VS Code which you may wish to be included in version control.
 #.vscode/
 
-# Flutter/Dart/Pub related
+# ==========================================
+# 🚀 FLUTTER / DART / PUB RELATED
+# ==========================================
 **/doc/api/
-**/ios/Flutter/.last_build_id
 .dart_tool/
+.flutter-plugins
 .flutter-plugins-dependencies
+.packages
 .pub-cache/
 .pub/
 /build/
+build/
 /coverage/
 
-# Symbolication related
-app.*.symbols
+# Exceptions to above rules
+!/packages/flutter_tools/test/data/dart_dependencies_setup/**/packages/valid/**
 
-# Obfuscation related
+# Symbolication & Obfuscation related
+app.*.symbols
 app.*.map.json
 
-# Android Studio will place build artifacts here
+# ==========================================
+# 🛡️ SECURITY & ENVIRONMENT VARIABLES
+# NEVER commit these to GitHub!
+# ==========================================
+.env
+.env.*
+*.keystore
+*.jks
+key.properties
+/android/local.properties
+
+# ==========================================
+# 🤖 ANDROID SPECIFIC
+# ==========================================
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/.gradle/
+/android/build/
+/android/app/build/
+
+# ==========================================
+# 🍎 IOS & MACOS SPECIFIC
+# ==========================================
+**/ios/Flutter/.last_build_id
+*.mode1v3
+*.mode2v3
+*.pbxuser
+*.perspectivev3
+xcuserdata/
+*.xccheckout
+*.xcworkspace/
+!default.xcworkspace/
+DerivedData/
+*.hmap
+*.ipa
+*.xcuserstate
+ios/.symlinks/
+ios/Pods/
+macos/Pods/
+macos/Flutter/ephemeral/
+
+# ==========================================
+# 💻 WINDOWS SPECIFIC
+# ==========================================
+windows/flutter/ephemeral/
+windows/flutter/generated_plugin_registrant.cc
+windows/flutter/generated_plugin_registrant.h
+windows/flutter/generated_plugins.cmake
+*.obj
+*.exe
+*.pdb
+*.exp
+*.lib
+
+# ==========================================
+# 🐧 LINUX SPECIFIC
+# ==========================================
+linux/flutter/ephemeral/
+linux/flutter/generated_plugin_registrant.cc
+linux/flutter/generated_plugin_registrant.h
+linux/flutter/generated_plugins.cmake

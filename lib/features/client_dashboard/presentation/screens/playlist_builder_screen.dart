@@ -314,7 +314,14 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
                   child: DragTarget<Map<String, dynamic>>(
                     onAcceptWithDetails: (details) {
                       setState(() {
-                        _currentPlaylist.add(PlaylistItem(id: DateTime.now().millisecondsSinceEpoch.toString(), url: details.data['url'], type: details.data['type']));
+                        // Pass name and thumbnailUrl when dragging into the playlist
+                        _currentPlaylist.add(PlaylistItem(
+                          id: DateTime.now().millisecondsSinceEpoch.toString(),
+                          url: details.data['url'],
+                          type: details.data['type'],
+                          name: details.data['name'],
+                          thumbnailUrl: details.data['thumbnailUrl'],
+                        ));
                       });
                     },
                     builder: (context, candidateData, rejectedData) {
@@ -354,11 +361,16 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
           itemBuilder: (context, index) {
             final data = docs[index].data() as Map<String, dynamic>;
             final isVideo = data['type'] == 'video';
+
+            // Extract name and thumbnail
+            final fileName = data['name'] ?? 'Unknown Media';
+            final thumbUrl = data['thumbnailUrl'] ?? '';
+
             return Draggable<Map<String, dynamic>>(
               data: data,
-              feedback: Material(color: Colors.transparent, child: Opacity(opacity: 0.7, child: _buildMediaCard(data['url'], isVideo, 120))),
-              childWhenDragging: Opacity(opacity: 0.3, child: _buildMediaCard(data['url'], isVideo, null)),
-              child: _buildMediaCard(data['url'], isVideo, null),
+              feedback: Material(color: Colors.transparent, child: Opacity(opacity: 0.7, child: _buildMediaCard(data['url'], isVideo, 120, thumbUrl, fileName))),
+              childWhenDragging: Opacity(opacity: 0.3, child: _buildMediaCard(data['url'], isVideo, null, thumbUrl, fileName)),
+              child: _buildMediaCard(data['url'], isVideo, null, thumbUrl, fileName),
             );
           },
         );
@@ -379,6 +391,13 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
       },
       itemBuilder: (context, index) {
         final item = _currentPlaylist[index];
+
+        // Determine the correct display image for the list tile
+        final isVideo = item.type == 'video';
+        final displayImageUrl = (isVideo && item.thumbnailUrl != null && item.thumbnailUrl!.isNotEmpty)
+            ? item.thumbnailUrl!
+            : (!isVideo && item.url.isNotEmpty ? item.url : null);
+
         return Card(
           key: Key(item.id),
           color: Colors.white.withOpacity(0.05),
@@ -386,8 +405,23 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           child: ListTile(
             onTap: () => _editSchedulePopup(index),
-            leading: Icon(item.type == 'video' ? Icons.play_circle : Icons.image, color: Colors.white),
-            title: Text("Item ${index + 1}", style: GoogleFonts.poppins(color: Colors.white)),
+            // Display the thumbnail instead of just an icon
+            leading: Container(
+              width: 50, height: 50,
+              decoration: BoxDecoration(
+                color: Colors.black45,
+                borderRadius: BorderRadius.circular(8),
+                image: displayImageUrl != null ? DecorationImage(
+                  image: NetworkImage(displayImageUrl),
+                  fit: BoxFit.cover,
+                ) : null,
+              ),
+              child: displayImageUrl == null
+                  ? Icon(isVideo ? Icons.play_circle : Icons.image, color: Colors.white)
+                  : null,
+            ),
+            // Display the actual file name instead of "Item 1"
+            title: Text(item.name ?? "Item ${index + 1}", style: GoogleFonts.poppins(color: Colors.white), maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: Text(_generateScheduleSubtitle(item), style: GoogleFonts.poppins(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.w500)),
             trailing: IconButton(
               icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
@@ -399,11 +433,42 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
     );
   }
 
-  Widget _buildMediaCard(String url, bool isVideo, double? size) {
+  // Updated _buildMediaCard to accept and show the name and thumbnail
+  Widget _buildMediaCard(String url, bool isVideo, double? size, String? thumbUrl, String? fileName) {
+    // If it's a video and has a thumbnail, use it. Otherwise, if it's an image, use the main URL.
+    final displayUrl = (isVideo && thumbUrl != null && thumbUrl.isNotEmpty) ? thumbUrl : (!isVideo && url.isNotEmpty ? url : null);
+
     return Container(
       width: size, height: size,
-      decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(12), image: !isVideo && url.isNotEmpty ? DecorationImage(image: NetworkImage(url), fit: BoxFit.cover, colorFilter: ColorFilter.mode(Colors.black.withOpacity(0.3), BlendMode.darken)) : null),
-      child: Center(child: Icon(isVideo ? Icons.play_circle_fill : Icons.image, color: Colors.white70, size: 32)),
+      decoration: BoxDecoration(
+          color: Colors.black45,
+          borderRadius: BorderRadius.circular(12),
+          image: displayUrl != null ? DecorationImage(
+              image: NetworkImage(displayUrl),
+              fit: BoxFit.cover,
+              colorFilter: ColorFilter.mode(Colors.black.withOpacity(0.4), BlendMode.darken)
+          ) : null
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Play button icon in the center if it's a video
+          Center(child: Icon(isVideo ? Icons.play_circle_fill : Icons.image, color: Colors.white70, size: 32)),
+
+          // Display the file name at the bottom
+          if (fileName != null)
+            Positioned(
+              bottom: 8, left: 8, right: 8,
+              child: Text(
+                fileName,
+                style: GoogleFonts.poppins(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+              ),
+            )
+        ],
+      ),
     );
   }
 }

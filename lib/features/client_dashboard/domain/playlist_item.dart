@@ -4,9 +4,14 @@ class PlaylistItem {
   final String id;
   final String url;
   final String type;
+
+  // 👇 NEW: Added properties for video thumbnails and display names
+  final String? name;
+  final String? thumbnailUrl;
+
   int durationInSeconds;
 
-  // NEW: Scheduling Properties
+  // Scheduling Properties
   String? startTime; // Stored as "HH:mm", null means all day
   String? endTime;   // Stored as "HH:mm", null means all day
   List<int> daysOfWeek; // 1 = Monday, 7 = Sunday. Empty list means everyday.
@@ -15,6 +20,8 @@ class PlaylistItem {
     required this.id,
     required this.url,
     required this.type,
+    this.name,             // 👈 NEW
+    this.thumbnailUrl,     // 👈 NEW
     this.durationInSeconds = 10,
     this.startTime,
     this.endTime,
@@ -26,6 +33,8 @@ class PlaylistItem {
       'id': id,
       'url': url,
       'type': type,
+      'name': name,                 // 👈 NEW
+      'thumbnailUrl': thumbnailUrl, // 👈 NEW
       'durationInSeconds': durationInSeconds,
       'startTime': startTime,
       'endTime': endTime,
@@ -38,6 +47,8 @@ class PlaylistItem {
       id: map['id'] ?? '',
       url: map['url'] ?? '',
       type: map['type'] ?? 'image',
+      name: map['name'],                 // 👈 NEW
+      thumbnailUrl: map['thumbnailUrl'], // 👈 NEW
       durationInSeconds: map['durationInSeconds'] ?? 10,
       startTime: map['startTime'],
       endTime: map['endTime'],

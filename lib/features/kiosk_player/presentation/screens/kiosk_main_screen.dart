@@ -8,11 +8,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'; // NEW: For listening to commands
 import 'package:shared_preferences/shared_preferences.dart'; // NEW: To get the hardware Screen ID
 
-// Import your views
+// Import your views and components
 import 'screensaver_view.dart';
 import 'interactive_catalog_view.dart';
 import '../../data/kiosk_pairing_service.dart';
 import 'kiosk_boot_screen.dart';
+import '../widgets/smart_branding_overlay.dart'; // 🌟 NEW: Import the Smart Branding Overlay
 
 class KioskMainScreen extends StatefulWidget {
   final String clientId;
@@ -309,6 +310,12 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
                   color: Colors.transparent,
                 ),
               ),
+            ),
+
+            // 🚀 NEW: THE BOITEXINFO SMART BRANDING OVERLAY
+            // Placed at the very end of the stack so it always stays on top!
+            SmartBrandingOverlay(
+              isInteractive: _isInteractiveMode,
             ),
           ],
         ),
