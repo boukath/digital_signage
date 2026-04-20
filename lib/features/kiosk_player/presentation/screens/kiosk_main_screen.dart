@@ -1,9 +1,12 @@
 // File: lib/features/kiosk_player/presentation/screens/kiosk_main_screen.dart
 
 import 'dart:async';
-import 'dart:io'; // Required to completely exit the Windows app
+import 'dart:io'; // Required for Process and exit
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // Needed for kIsWeb
 import 'package:google_fonts/google_fonts.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; // NEW: For listening to commands
+import 'package:shared_preferences/shared_preferences.dart'; // NEW: To get the hardware Screen ID
 
 // Import your views
 import 'screensaver_view.dart';
@@ -33,10 +36,83 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
   int _secretCloseTapCount = 0;
   Timer? _secretCloseTapTimer;
 
+  // 🌟 NEW: Subscription for Remote Commands
+  StreamSubscription? _remoteCommandSubscription;
+
   @override
   void initState() {
     super.initState();
     // App starts in Passive Screensaver Mode
+    // Start listening for dashboard commands immediately!
+    _listenForRemoteCommands();
+  }
+
+  // ==========================================
+  // 🌟 NEW: REMOTE COMMAND LISTENER
+  // ==========================================
+  Future<void> _listenForRemoteCommands() async {
+    try {
+      // 1. Get this specific hardware's Screen ID
+      final prefs = await SharedPreferences.getInstance();
+      final screenId = prefs.getString('screen_id');
+
+      if (screenId == null) {
+        debugPrint("⚠️ [COMMAND] No Screen ID found. Cannot listen for commands.");
+        return;
+      }
+
+      debugPrint("📡 [COMMAND] Listening for remote commands on Screen ID: $screenId");
+
+      // 2. Listen to this specific screen's document in Firestore
+      _remoteCommandSubscription = FirebaseFirestore.instance
+          .collection('clients')
+          .doc(widget.clientId)
+          .collection('screens')
+          .doc(screenId)
+          .snapshots()
+          .listen((snapshot) async {
+
+        if (!snapshot.exists || !snapshot.data()!.containsKey('pendingCommand')) return;
+
+        final data = snapshot.data()!;
+        final command = data['pendingCommand'];
+
+        if (command != null) {
+          debugPrint("🚨 [COMMAND] RECEIVED REMOTE COMMAND: $command");
+
+          // 3. ACKNOWLEDGE: Clear the command immediately so we don't loop!
+          await snapshot.reference.update({'pendingCommand': null});
+
+          // 4. EXECUTE THE COMMAND
+          if (command == 'reboot') {
+            _executeSystemReboot();
+          }
+          // You can add logic for 'force_sync' and 'clear_cache' here in the future
+        }
+      });
+    } catch (e) {
+      debugPrint("❌ [COMMAND] Failed to set up command listener: $e");
+    }
+  }
+
+  // ==========================================
+  // 🔄 NEW: NATIVE WINDOWS REBOOT
+  // ==========================================
+  void _executeSystemReboot() {
+    debugPrint("🔄 [SYSTEM] Initiating Hardware Reboot...");
+
+    if (!kIsWeb && Platform.isWindows) {
+      // Uses the native Windows CMD to force a restart instantly
+      // /r = restart, /f = force close apps, /t 0 = zero seconds delay
+      Process.run('shutdown', ['/r', '/f', '/t', '0']).then((result) {
+        debugPrint("💻 Windows shutdown command sent.");
+      }).catchError((e) {
+        debugPrint("❌ Failed to reboot Windows: $e");
+      });
+    } else {
+      // Fallback for testing on Mac/Linux (just closes the app)
+      exit(0);
+    }
   }
 
   // Called whenever the user touches the screen
@@ -171,6 +247,8 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
     _idleTimer?.cancel();
     _secretTapTimer?.cancel();
     _secretCloseTapTimer?.cancel();
+    // 🌟 Clean up our remote listener!
+    _remoteCommandSubscription?.cancel();
     super.dispose();
   }
 
@@ -208,10 +286,10 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
               top: 0,
               right: 0,
               child: GestureDetector(
-                behavior: HitTestBehavior.opaque, // 👈 Ensures it catches taps even with transparent background
+                behavior: HitTestBehavior.opaque, // Ensures it catches taps even with transparent background
                 onTap: _handleSecretAdminTap,
                 child: Container(
-                  width: 50, // 👈 FIXED: Shrunk from 120 to 50 so it sits in the absolute corner
+                  width: 50,
                   height: 50,
                   color: Colors.transparent,
                 ),
@@ -223,10 +301,10 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
               top: 0,
               left: 0,
               child: GestureDetector(
-                behavior: HitTestBehavior.opaque, // 👈 Ensures it catches taps even with transparent background
+                behavior: HitTestBehavior.opaque, // Ensures it catches taps even with transparent background
                 onTap: _handleSecretCloseTap,
                 child: Container(
-                  width: 50, // 👈 FIXED: Shrunk from 120 to 50 to avoid overlapping the "Back to Aisle" button!
+                  width: 50,
                   height: 50,
                   color: Colors.transparent,
                 ),

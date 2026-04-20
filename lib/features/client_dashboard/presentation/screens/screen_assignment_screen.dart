@@ -125,6 +125,66 @@ class _ScreenAssignmentScreenState extends State<ScreenAssignmentScreen> {
     }
   }
 
+  // ==========================================
+  // 🌟 NEW: RENAME SCREEN LOGIC
+  // ==========================================
+  Future<void> _renameScreen(String screenId, String currentName) async {
+    if (_currentClientId == null) return;
+
+    // Pre-fill the text field with the current name
+    final TextEditingController nameController = TextEditingController(text: currentName);
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: AppColors.glassBackground,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: AppColors.glassBorder),
+          ),
+          title: Text("Rename Screen", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+          content: TextField(
+            controller: nameController,
+            style: GoogleFonts.poppins(color: Colors.white),
+            decoration: InputDecoration(
+              labelText: "Location / Name (e.g., Front Lobby)",
+              labelStyle: GoogleFonts.poppins(color: Colors.white54),
+              filled: true,
+              fillColor: Colors.black26,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text("Cancel", style: GoogleFonts.poppins(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.backgroundGradientStart),
+              onPressed: () async {
+                final newName = nameController.text.trim();
+                if (newName.isNotEmpty) {
+                  // Update the name directly in Firestore
+                  await _firestore
+                      .collection('clients')
+                      .doc(_currentClientId)
+                      .collection('screens')
+                      .doc(screenId)
+                      .update({'name': newName});
+
+                  if (mounted) Navigator.pop(context);
+                  _showSnackBar("Screen renamed to '$newName'", Colors.green);
+                }
+              },
+              child: Text("Save Name", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   void _showSnackBar(String message, Color color) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -269,6 +329,9 @@ class _ScreenAssignmentScreenState extends State<ScreenAssignmentScreen> {
             final isOnline = screenData['status'] == 'online';
             final screenId = screens[index].id;
 
+            // 🌟 Use the dynamic name from Firestore, fallback if null
+            final screenName = screenData['name'] ?? 'Unknown Screen';
+
             return Card(
               color: Colors.white.withOpacity(0.05),
               margin: const EdgeInsets.only(bottom: 12),
@@ -283,17 +346,20 @@ class _ScreenAssignmentScreenState extends State<ScreenAssignmentScreen> {
                   ),
                   child: Icon(Icons.connected_tv, color: isOnline ? Colors.greenAccent : Colors.redAccent),
                 ),
-                title: Text(screenData['name'] ?? 'Unknown Screen', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600)),
+
+                // 🌟 Display the updated screen name
+                title: Text(screenName, style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600)),
                 subtitle: Text(
                   screenData['pendingCommand'] != null
                       ? "Status: Executing command..."
-                      : "ID: $screenId",
+                      : "Hardware ID: $screenId",
                   style: GoogleFonts.poppins(
                       color: screenData['pendingCommand'] != null ? Colors.orangeAccent : Colors.white54,
                       fontSize: 12
                   ),
                 ),
-                // NEW: Replaced standard IconButton with an interactive Dropdown Menu
+
+                // 🌟 UPDATED: Added "Edit Name" to the dropdown menu
                 trailing: PopupMenuButton<String>(
                   icon: const Icon(Icons.more_vert, color: Colors.white),
                   color: const Color(0xFF2C2C4E), // A dark elegant color for the menu background
@@ -302,11 +368,24 @@ class _ScreenAssignmentScreenState extends State<ScreenAssignmentScreen> {
                     side: const BorderSide(color: Colors.white24),
                   ),
                   onSelected: (value) {
+                    if (value == 'edit_name') _renameScreen(screenId, screenName); // Trigger the rename popup
                     if (value == 'force_sync') _sendCommandToHardware(screenId, 'force_sync', 'Force Sync');
                     if (value == 'clear_cache') _sendCommandToHardware(screenId, 'clear_cache', 'Clear Cache');
                     if (value == 'reboot') _sendCommandToHardware(screenId, 'reboot', 'Reboot');
                   },
                   itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                    // New Edit Name Option
+                    PopupMenuItem<String>(
+                      value: 'edit_name',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.edit_note, color: Colors.blueAccent, size: 20),
+                          const SizedBox(width: 12),
+                          Text('Edit Name', style: GoogleFonts.poppins(color: Colors.white)),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuDivider(height: 1),
                     PopupMenuItem<String>(
                       value: 'force_sync',
                       child: Row(
