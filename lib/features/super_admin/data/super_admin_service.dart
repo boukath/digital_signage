@@ -45,7 +45,6 @@ class SuperAdminService {
       final DateTime endDate = DateTime(startDate.year + 1, startDate.month, startDate.day);
 
       // 2. ADD TO FIRESTORE DATABASE: Save business details into the 'clients' collection
-      // ➔ CHANGED: Now saves to the 'clients' collection
       await _firestore.collection('clients').doc(newClientId).set({
         'companyName': companyName,
         'contactEmail': contactEmail,
@@ -74,7 +73,6 @@ class SuperAdminService {
   /// Toggles the 'isActive' state. If true, becomes false (Paused).
   Future<void> toggleClientStatus(String clientId, bool currentStatus) async {
     try {
-      // ➔ CHANGED: Now updates in the 'clients' collection
       await _firestore.collection('clients').doc(clientId).update({
         'isActive': !currentStatus,
       });
@@ -88,7 +86,6 @@ class SuperAdminService {
   /// Deletes the client's profile from the database entirely.
   Future<void> deleteClient(String clientId) async {
     try {
-      // ➔ CHANGED: Now deletes from the 'clients' collection
       await _firestore.collection('clients').doc(clientId).delete();
     } catch (e) {
       print('Error deleting client: $e');
@@ -100,11 +97,47 @@ class SuperAdminService {
   /// Updates specific fields for an existing client (like extending their license date).
   Future<void> updateClientDetails(String clientId, Map<String, dynamic> updatedData) async {
     try {
-      // ➔ CHANGED: Now updates in the 'clients' collection
       await _firestore.collection('clients').doc(clientId).update(updatedData);
     } catch (e) {
       print('Error updating client: $e');
       rethrow;
+    }
+  }
+
+  // ==========================================
+  // 🚀 NEW: GLOBAL FLEET UPDATE
+  // ==========================================
+  /// Documentation:
+  /// Sends an 'update' command to EVERY screen across EVERY client simultaneously.
+  /// Uses a Firestore Batch to ensure atomic operations.
+  Future<void> deployGlobalUpdate(String downloadUrl) async {
+    try {
+      // 1. Get all clients
+      final clientsSnap = await _firestore.collection('clients').get();
+
+      // 2. We use a Batch to send commands to hundreds of screens simultaneously
+      final batch = _firestore.batch();
+
+      for (var clientDoc in clientsSnap.docs) {
+        // Get all screens for this specific client
+        final screensSnap = await clientDoc.reference.collection('screens').get();
+
+        for (var screenDoc in screensSnap.docs) {
+          // Attach the update command and the URL to the screen document
+          batch.update(screenDoc.reference, {
+            'pendingCommand': 'update',
+            'updateUrl': downloadUrl,
+          });
+        }
+      }
+
+      // 3. Commit the batch! All screens will instantly trigger the download protocol.
+      await batch.commit();
+      print('✅ Global update command broadcasted to all screens.');
+
+    } catch (e) {
+      print('Error deploying global update: $e');
+      throw Exception("Failed to deploy global update: $e");
     }
   }
 }

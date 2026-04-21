@@ -7,6 +7,7 @@ import '../../../auth/data/auth_service.dart';
 import '../../data/super_admin_service.dart';
 import '../../domain/tenant_model.dart';
 import '../widgets/add_client_modal.dart';
+import '../widgets/deploy_update_modal.dart'; // 🚀 NEW: Import the deployment modal
 
 /// Documentation:
 /// The main Level 1 control panel. Displays a list of all clients (tenants)
@@ -88,10 +89,36 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             "Super Admin Control",
             style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
           ),
-          IconButton(
-            icon: const Icon(Icons.logout_rounded, color: Colors.white),
-            tooltip: 'Log Out',
-            onPressed: () => _authService.signOut(),
+
+          // 🚀 NEW: Grouped buttons for Deploy Update and Log Out
+          Row(
+            children: [
+              // The Fleet Update Button
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white24,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                ),
+                icon: const Icon(Icons.system_update_alt_rounded),
+                label: Text("Deploy Update", style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    barrierColor: Colors.black.withOpacity(0.4),
+                    builder: (context) => const DeployUpdateModal(),
+                  );
+                },
+              ),
+              const SizedBox(width: 16),
+
+              // Original Logout Button
+              IconButton(
+                icon: const Icon(Icons.logout_rounded, color: Colors.white),
+                tooltip: 'Log Out',
+                onPressed: () => _authService.signOut(),
+              ),
+            ],
           ),
         ],
       ),

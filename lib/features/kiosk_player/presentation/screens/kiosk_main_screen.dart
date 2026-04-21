@@ -1,19 +1,23 @@
 // File: lib/features/kiosk_player/presentation/screens/kiosk_main_screen.dart
 
 import 'dart:async';
-import 'dart:io'; // Required for Process and exit
+import 'dart:io'; // Required for Process, exit, and File
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'; // Needed for kIsWeb
 import 'package:google_fonts/google_fonts.dart';
-import 'package:cloud_firestore/cloud_firestore.dart'; // NEW: For listening to commands
-import 'package:shared_preferences/shared_preferences.dart'; // NEW: To get the hardware Screen ID
+import 'package:cloud_firestore/cloud_firestore.dart'; // For listening to commands
+import 'package:shared_preferences/shared_preferences.dart'; // To get the hardware Screen ID
+
+// 📥 NEW: Required for downloading the update
+import 'package:path_provider/path_provider.dart';
+import 'package:http/http.dart' as http;
 
 // Import your views and components
 import 'screensaver_view.dart';
 import 'interactive_catalog_view.dart';
 import '../../data/kiosk_pairing_service.dart';
 import 'kiosk_boot_screen.dart';
-import '../widgets/smart_branding_overlay.dart'; // 🌟 NEW: Import the Smart Branding Overlay
+import '../widgets/smart_branding_overlay.dart';
 
 class KioskMainScreen extends StatefulWidget {
   final String clientId;
@@ -37,7 +41,7 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
   int _secretCloseTapCount = 0;
   Timer? _secretCloseTapTimer;
 
-  // 🌟 NEW: Subscription for Remote Commands
+  // 🌟 Subscription for Remote Commands
   StreamSubscription? _remoteCommandSubscription;
 
   @override
@@ -49,7 +53,7 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
   }
 
   // ==========================================
-  // 🌟 NEW: REMOTE COMMAND LISTENER
+  // 🌟 REMOTE COMMAND LISTENER
   // ==========================================
   Future<void> _listenForRemoteCommands() async {
     try {
@@ -87,6 +91,15 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
           // 4. EXECUTE THE COMMAND
           if (command == 'reboot') {
             _executeSystemReboot();
+          } else if (command == 'update') {
+            // 📥 NEW: Handle the update command
+            final updateUrl = data['updateUrl'];
+            if (updateUrl != null) {
+              // Start the background download!
+              _downloadUpdateAndPrepare(updateUrl);
+            } else {
+              debugPrint("⚠️ [UPDATE] Received update command, but no URL was provided!");
+            }
           }
           // You can add logic for 'force_sync' and 'clear_cache' here in the future
         }
@@ -97,7 +110,82 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
   }
 
   // ==========================================
-  // 🔄 NEW: NATIVE WINDOWS REBOOT
+  // 📥 SILENT UPDATE DOWNLOADER & SIDECAR TRIGGER
+  // ==========================================
+  Future<void> _downloadUpdateAndPrepare(String downloadUrl) async {
+    debugPrint("📥 [UPDATE] Starting silent download from: $downloadUrl");
+
+    try {
+      // 1. Get the hidden Windows Temp folder
+      final tempDir = await getTemporaryDirectory();
+
+      // 2. Define where we will save the zip file
+      final zipPath = '${tempDir.path}\\signage_update.zip';
+      final file = File(zipPath);
+
+      // 3. Download the file using http
+      final response = await http.get(Uri.parse(downloadUrl));
+
+      if (response.statusCode == 200) {
+        await file.writeAsBytes(response.bodyBytes);
+        debugPrint("✅ [UPDATE] Successfully downloaded update to: $zipPath");
+
+        // 🚀 NEW: Trigger Step 2 (The Sidecar Script)
+        _triggerSidecarUpdater(zipPath, tempDir.path);
+
+      } else {
+        debugPrint("❌ [UPDATE] Failed to download. Server returned: ${response.statusCode}");
+      }
+    } catch (e) {
+      debugPrint("❌ [UPDATE] Download error: $e");
+    }
+  }
+
+  // ==========================================
+  // 🪄 THE SIDECAR UPDATER MAGIC
+  // ==========================================
+  void _triggerSidecarUpdater(String zipPath, String tempDirPath) async {
+    debugPrint("🪄 [UPDATE] Generating Sidecar Updater Script...");
+
+    // 1. Find exactly where this current app is running from
+    final appExecutablePath = Platform.resolvedExecutable;
+    final appInstallDirectory = File(appExecutablePath).parent.path;
+
+    // 2. Define where we will write our temporary Batch script
+    final scriptPath = '$tempDirPath\\updater.bat';
+
+    // 3. Write the Windows Batch script commands
+    // - Wait 3 seconds
+    // - Unzip and overwrite files
+    // - Delete the zip file
+    // - Relaunch the app
+    // - Delete this batch script
+    final batContent = '''
+@echo off
+echo Installing Update for Digital Signage...
+timeout /t 3 /nobreak > NUL
+powershell -Command "Expand-Archive -Path '$zipPath' -DestinationPath '$appInstallDirectory' -Force"
+del "$zipPath"
+start "" "$appExecutablePath"
+del "%~f0"
+''';
+
+    // 4. Save the script to the disk
+    final scriptFile = File(scriptPath);
+    await scriptFile.writeAsString(batContent);
+
+    debugPrint("🚀 [UPDATE] Launching Updater and closing app...");
+
+    // 5. Execute the batch script detached from the app (so it survives when the app dies)
+    await Process.start(scriptPath, [], mode: ProcessStartMode.detached);
+
+    // 6. INSTANTLY KILL THE FLUTTER APP
+    // This unlocks the files so the batch script can safely overwrite them!
+    exit(0);
+  }
+
+  // ==========================================
+  // 🔄 NATIVE WINDOWS REBOOT
   // ==========================================
   void _executeSystemReboot() {
     debugPrint("🔄 [SYSTEM] Initiating Hardware Reboot...");
