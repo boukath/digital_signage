@@ -5,14 +5,15 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../features/auth/data/auth_service.dart';
 
-// Import all 7 screens
+// Import all 8 screens
 import 'overview_screen.dart';
 import 'media_manager_screen.dart';
 import 'playlist_builder_screen.dart';
 import 'catalog_builder_screen.dart';
-import 'department_manager_screen.dart'; // 👈 NEW: Department Manager Screen imported
+import 'department_manager_screen.dart';
 import 'analytics_screen.dart';
 import 'screen_assignment_screen.dart';
+import 'layout_builder_screen.dart'; // 👈 NEW: Import our Pro Builder
 
 /// Documentation:
 /// This is the main shell for Level 2 (The Client Dashboard).
@@ -29,15 +30,16 @@ class _ClientDashboardState extends State<ClientDashboard> {
   int _selectedIndex = 0;
   final AuthService _authService = AuthService();
 
-  // Exactly 7 Pages in the correct order
+  // Exactly 8 Pages in the correct order
   late final List<Widget> _pages = [
     const OverviewScreen(),           // Index 0
     const MediaManagerScreen(),       // Index 1
     const PlaylistBuilderScreen(),    // Index 2 (Screensaver)
     const CatalogBuilderScreen(),     // Index 3 (Catalog)
-    const DepartmentManagerScreen(),  // Index 4 (Departments) 👈 NEW
+    const DepartmentManagerScreen(),  // Index 4 (Departments)
     const AnalyticsScreen(),          // Index 5 (Analytics)
     const ScreenAssignmentScreen(),   // Index 6 (Screens)
+    const LayoutBuilderScreen(),      // Index 7 (Pro Layouts) 👈 NEW
   ];
 
   @override
@@ -133,7 +135,7 @@ class _ClientDashboardState extends State<ClientDashboard> {
         unselectedLabelTextStyle: GoogleFonts.poppins(color: Colors.white54),
         labelType: NavigationRailLabelType.all,
 
-        // Exactly 7 Destinations (Matching the _pages list perfectly)
+        // Exactly 8 Destinations (Matching the _pages list perfectly)
         destinations: const [
           NavigationRailDestination(
             icon: Icon(Icons.dashboard_outlined),
@@ -158,7 +160,7 @@ class _ClientDashboardState extends State<ClientDashboard> {
           NavigationRailDestination(
             icon: Icon(Icons.category_outlined),
             selectedIcon: Icon(Icons.category),
-            label: Text('Departments'), // Index 4 👈 NEW BUTTON
+            label: Text('Departments'), // Index 4
           ),
           NavigationRailDestination(
             icon: Icon(Icons.bar_chart_outlined),
@@ -169,6 +171,11 @@ class _ClientDashboardState extends State<ClientDashboard> {
             icon: Icon(Icons.tv_outlined),
             selectedIcon: Icon(Icons.tv),
             label: Text('Screens'), // Index 6
+          ),
+          NavigationRailDestination(
+            icon: Icon(Icons.dashboard_customize_outlined),
+            selectedIcon: Icon(Icons.dashboard_customize),
+            label: Text('Pro Layouts'), // Index 7 👈 NEW BUTTON
           ),
         ],
       ),

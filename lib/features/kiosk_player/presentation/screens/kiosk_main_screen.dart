@@ -8,7 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'; // For listening to commands
 import 'package:shared_preferences/shared_preferences.dart'; // To get the hardware Screen ID
 
-// 📥 NEW: Required for downloading the update
+// 📥 Required for downloading the update
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 
@@ -18,6 +18,11 @@ import 'interactive_catalog_view.dart';
 import '../../data/kiosk_pairing_service.dart';
 import 'kiosk_boot_screen.dart';
 import '../widgets/smart_branding_overlay.dart';
+
+// 👇 NEW: Import the Pro Layout Data Models, Service, and the new MediaZonePlayer!
+import '../../../client_dashboard/domain/layout_model.dart';
+import '../../data/kiosk_layout_service.dart';
+import '../widgets/media_zone_player.dart'; // <--- We import the player here
 
 class KioskMainScreen extends StatefulWidget {
   final String clientId;
@@ -44,6 +49,9 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
   // 🌟 Subscription for Remote Commands
   StreamSubscription? _remoteCommandSubscription;
 
+  // 👇 The Service to fetch the Pro Layouts
+  final KioskLayoutService _layoutService = KioskLayoutService();
+
   @override
   void initState() {
     super.initState();
@@ -52,12 +60,19 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
     _listenForRemoteCommands();
   }
 
+  // --- HELPER FUNCTION FOR PRO LAYOUT COLORS ---
+  Color _hexToColor(String hexString) {
+    final buffer = StringBuffer();
+    if (hexString.length == 6 || hexString.length == 7) buffer.write('ff');
+    buffer.write(hexString.replaceFirst('#', ''));
+    return Color(int.parse(buffer.toString(), radix: 16));
+  }
+
   // ==========================================
   // 🌟 REMOTE COMMAND LISTENER
   // ==========================================
   Future<void> _listenForRemoteCommands() async {
     try {
-      // 1. Get this specific hardware's Screen ID
       final prefs = await SharedPreferences.getInstance();
       final screenId = prefs.getString('screen_id');
 
@@ -68,7 +83,6 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
 
       debugPrint("📡 [COMMAND] Listening for remote commands on Screen ID: $screenId");
 
-      // 2. Listen to this specific screen's document in Firestore
       _remoteCommandSubscription = FirebaseFirestore.instance
           .collection('clients')
           .doc(widget.clientId)
@@ -85,23 +99,20 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
         if (command != null) {
           debugPrint("🚨 [COMMAND] RECEIVED REMOTE COMMAND: $command");
 
-          // 3. ACKNOWLEDGE: Clear the command immediately so we don't loop!
+          // ACKNOWLEDGE: Clear the command immediately
           await snapshot.reference.update({'pendingCommand': null});
 
-          // 4. EXECUTE THE COMMAND
+          // EXECUTE THE COMMAND
           if (command == 'reboot') {
             _executeSystemReboot();
           } else if (command == 'update') {
-            // 📥 NEW: Handle the update command
             final updateUrl = data['updateUrl'];
             if (updateUrl != null) {
-              // Start the background download!
               _downloadUpdateAndPrepare(updateUrl);
             } else {
               debugPrint("⚠️ [UPDATE] Received update command, but no URL was provided!");
             }
           }
-          // You can add logic for 'force_sync' and 'clear_cache' here in the future
         }
       });
     } catch (e) {
@@ -114,25 +125,17 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
   // ==========================================
   Future<void> _downloadUpdateAndPrepare(String downloadUrl) async {
     debugPrint("📥 [UPDATE] Starting silent download from: $downloadUrl");
-
     try {
-      // 1. Get the hidden Windows Temp folder
       final tempDir = await getTemporaryDirectory();
-
-      // 2. Define where we will save the zip file
       final zipPath = '${tempDir.path}\\signage_update.zip';
       final file = File(zipPath);
 
-      // 3. Download the file using http
       final response = await http.get(Uri.parse(downloadUrl));
 
       if (response.statusCode == 200) {
         await file.writeAsBytes(response.bodyBytes);
         debugPrint("✅ [UPDATE] Successfully downloaded update to: $zipPath");
-
-        // 🚀 NEW: Trigger Step 2 (The Sidecar Script)
         _triggerSidecarUpdater(zipPath, tempDir.path);
-
       } else {
         debugPrint("❌ [UPDATE] Failed to download. Server returned: ${response.statusCode}");
       }
@@ -146,20 +149,10 @@ class _KioskMainScreenState extends State<KioskMainScreen> {
   // ==========================================
   void _triggerSidecarUpdater(String zipPath, String tempDirPath) async {
     debugPrint("🪄 [UPDATE] Generating Sidecar Updater Script...");
-
-    // 1. Find exactly where this current app is running from
     final appExecutablePath = Platform.resolvedExecutable;
     final appInstallDirectory = File(appExecutablePath).parent.path;
-
-    // 2. Define where we will write our temporary Batch script
     final scriptPath = '$tempDirPath\\updater.bat';
 
-    // 3. Write the Windows Batch script commands
-    // - Wait 3 seconds
-    // - Unzip and overwrite files
-    // - Delete the zip file
-    // - Relaunch the app
-    // - Delete this batch script
     final batContent = '''
 @echo off
 echo Installing Update for Digital Signage...
@@ -170,17 +163,11 @@ start "" "$appExecutablePath"
 del "%~f0"
 ''';
 
-    // 4. Save the script to the disk
     final scriptFile = File(scriptPath);
     await scriptFile.writeAsString(batContent);
 
     debugPrint("🚀 [UPDATE] Launching Updater and closing app...");
-
-    // 5. Execute the batch script detached from the app (so it survives when the app dies)
     await Process.start(scriptPath, [], mode: ProcessStartMode.detached);
-
-    // 6. INSTANTLY KILL THE FLUTTER APP
-    // This unlocks the files so the batch script can safely overwrite them!
     exit(0);
   }
 
@@ -189,17 +176,13 @@ del "%~f0"
   // ==========================================
   void _executeSystemReboot() {
     debugPrint("🔄 [SYSTEM] Initiating Hardware Reboot...");
-
     if (!kIsWeb && Platform.isWindows) {
-      // Uses the native Windows CMD to force a restart instantly
-      // /r = restart, /f = force close apps, /t 0 = zero seconds delay
       Process.run('shutdown', ['/r', '/f', '/t', '0']).then((result) {
         debugPrint("💻 Windows shutdown command sent.");
       }).catchError((e) {
         debugPrint("❌ Failed to reboot Windows: $e");
       });
     } else {
-      // Fallback for testing on Mac/Linux (just closes the app)
       exit(0);
     }
   }
@@ -210,8 +193,6 @@ del "%~f0"
       setState(() => _isInteractiveMode = true);
       debugPrint("👆 Screen Touched! Switching to Interactive State B");
     }
-
-    // Reset the idle timer every time they tap or interact
     _idleTimer?.cancel();
     _idleTimer = Timer(Duration(seconds: _idleTimeoutSeconds), _returnToScreensaver);
   }
@@ -231,7 +212,7 @@ del "%~f0"
     _secretTapCount++;
     _secretTapTimer?.cancel();
     _secretTapTimer = Timer(const Duration(seconds: 2), () {
-      _secretTapCount = 0; // Reset if they are too slow
+      _secretTapCount = 0;
     });
 
     if (_secretTapCount >= 5) {
@@ -288,7 +269,7 @@ del "%~f0"
     _secretCloseTapCount++;
     _secretCloseTapTimer?.cancel();
     _secretCloseTapTimer = Timer(const Duration(seconds: 2), () {
-      _secretCloseTapCount = 0; // Reset if they are too slow
+      _secretCloseTapCount = 0;
     });
 
     if (_secretCloseTapCount >= 5) {
@@ -321,7 +302,7 @@ del "%~f0"
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
               onPressed: () {
-                exit(0); // This instantly closes the Windows Application
+                exit(0);
               },
               child: Text("Close App", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
@@ -336,7 +317,6 @@ del "%~f0"
     _idleTimer?.cancel();
     _secretTapTimer?.cancel();
     _secretCloseTapTimer?.cancel();
-    // 🌟 Clean up our remote listener!
     _remoteCommandSubscription?.cancel();
     super.dispose();
   }
@@ -352,13 +332,89 @@ del "%~f0"
         behavior: HitTestBehavior.translucent,
         child: Stack(
           children: [
-            // STATE A: The Passive Screensaver
-            ScreensaverView(
-                clientId: widget.clientId,
-                isPaused: _isInteractiveMode
+
+            // ==========================================
+            // 🎨 STATE A: PRO MULTI-ZONE LAYOUT (Screensaver)
+            // ==========================================
+            Positioned.fill(
+              child: StreamBuilder<LayoutModel?>(
+                // Note: Hardcoded 'layout_001' for testing. Later, you can tie this to a specific screenId!
+                stream: _layoutService.listenToLayout('layout_001'),
+                builder: (context, snapshot) {
+
+                  // If the layout is missing, gracefully fall back to the original full-screen video loop!
+                  if (snapshot.hasError || !snapshot.hasData || snapshot.data == null) {
+                    return ScreensaverView(
+                        clientId: widget.clientId,
+                        isPaused: _isInteractiveMode
+                    );
+                  }
+
+                  final layout = snapshot.data!;
+
+                  // 🧩 Render the Multi-Zone Parser!
+                  return Center(
+                    child: AspectRatio(
+                      aspectRatio: layout.isLandscape ? 16 / 9 : 9 / 16,
+                      child: Container(
+                        color: Colors.black,
+                        child: Stack(
+                          children: layout.zones.map((zone) {
+                            return Positioned(
+                              left: zone.x,
+                              top: zone.y,
+                              width: zone.width,
+                              height: zone.height,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: _hexToColor(zone.colorHex),
+                                ),
+                                child: ClipRRect(
+                                  // 👇 THIS IS THE NEW INTEGRATION!
+                                  child: Builder(
+                                    builder: (context) {
+                                      // 1. IS IT A PLAYLIST?
+                                      if (zone.zoneType == 'playlist') {
+                                        return MediaZonePlayer(
+                                          clientId: widget.clientId,
+                                          zoneId: zone.id,
+                                          // Note: We will update MediaZonePlayer to accept assignedPlaylistId next!
+                                        );
+                                      }
+
+                                      // 2. IS IT A STATIC LOGO?
+                                      else if (zone.zoneType == 'static_logo') {
+                                        if (zone.contentId == null || zone.contentId!.isEmpty) {
+                                          return const Center(child: Icon(Icons.broken_image, color: Colors.white54));
+                                        }
+                                        return Image.network(
+                                          zone.contentId!,
+                                          fit: BoxFit.contain, // Contain ensures the logo doesn't get cut off!
+                                          errorBuilder: (context, error, stackTrace) => const Center(
+                                            child: Icon(Icons.broken_image, color: Colors.white54, size: 40),
+                                          ),
+                                        );
+                                      }
+
+                                      // 3. FALLBACK
+                                      return const Center(child: Text('Empty Zone', style: TextStyle(color: Colors.white)));
+                                    },
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
             ),
 
-            // STATE B: The Interactive Catalog
+            // ==========================================
+            // 👆 STATE B: THE INTERACTIVE CATALOG
+            // ==========================================
             AnimatedOpacity(
               opacity: _isInteractiveMode ? 1.0 : 0.0,
               duration: const Duration(milliseconds: 600),
@@ -375,13 +431,9 @@ del "%~f0"
               top: 0,
               right: 0,
               child: GestureDetector(
-                behavior: HitTestBehavior.opaque, // Ensures it catches taps even with transparent background
+                behavior: HitTestBehavior.opaque,
                 onTap: _handleSecretAdminTap,
-                child: Container(
-                  width: 50,
-                  height: 50,
-                  color: Colors.transparent,
-                ),
+                child: Container(width: 80, height: 80, color: Colors.transparent),
               ),
             ),
 
@@ -390,18 +442,13 @@ del "%~f0"
               top: 0,
               left: 0,
               child: GestureDetector(
-                behavior: HitTestBehavior.opaque, // Ensures it catches taps even with transparent background
+                behavior: HitTestBehavior.opaque,
                 onTap: _handleSecretCloseTap,
-                child: Container(
-                  width: 50,
-                  height: 50,
-                  color: Colors.transparent,
-                ),
+                child: Container(width: 80, height: 80, color: Colors.transparent),
               ),
             ),
 
-            // 🚀 NEW: THE BOITEXINFO SMART BRANDING OVERLAY
-            // Placed at the very end of the stack so it always stays on top!
+            // 🚀 THE BOITEXINFO SMART BRANDING OVERLAY
             SmartBrandingOverlay(
               isInteractive: _isInteractiveMode,
             ),

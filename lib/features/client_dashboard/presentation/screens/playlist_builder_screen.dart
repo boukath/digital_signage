@@ -23,61 +23,175 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
   List<PlaylistItem> _currentPlaylist = [];
   bool _isSaving = false;
 
+  // 👇 NEW: Variables for Multi-Playlist Support
+  List<Map<String, dynamic>> _availablePlaylists = [];
+  String _activePlaylistId = 'default_playlist';
+  String _activePlaylistName = 'Default Playlist';
+
   @override
   void initState() {
     super.initState();
-    _fetchClientId();
+    _fetchClientIdAndPlaylists();
   }
 
-  Future<void> _fetchClientId() async {
+  Future<void> _fetchClientIdAndPlaylists() async {
     final appUser = await _authService.userStateStream.first;
-    if (mounted) {
+    if (mounted && appUser != null) {
       setState(() {
-        _currentClientId = appUser?.uid;
+        _currentClientId = appUser.uid;
       });
-      _loadExistingPlaylist();
+      await _loadPlaylistsList();
     }
   }
 
-  Future<void> _loadExistingPlaylist() async {
+  // 👇 NEW: Fetch all playlists this client has created
+  Future<void> _loadPlaylistsList() async {
     if (_currentClientId == null) return;
-    final doc = await _firestore.collection('clients').doc(_currentClientId).get();
-    if (doc.exists && doc.data()!.containsKey('playlist')) {
-      final List<dynamic> savedItems = doc.data()!['playlist'];
+
+    final snapshot = await _firestore
+        .collection('clients')
+        .doc(_currentClientId)
+        .collection('playlists')
+        .get();
+
+    if (snapshot.docs.isEmpty) {
+      // Create a default one if they have none
+      await _createNewPlaylist('Default Playlist', id: 'default_playlist');
+    } else {
       setState(() {
-        _currentPlaylist = savedItems.map((item) => PlaylistItem.fromMap(item)).toList();
+        _availablePlaylists = snapshot.docs.map((doc) => {
+          'id': doc.id,
+          'name': doc.data()['name'] ?? 'Unnamed Playlist'
+        }).toList();
+
+        // Select the first one automatically
+        _activePlaylistId = _availablePlaylists.first['id'];
+        _activePlaylistName = _availablePlaylists.first['name'];
       });
+      _loadActivePlaylistItems();
     }
   }
 
+  // 👇 NEW: Load the items for the currently selected playlist
+  Future<void> _loadActivePlaylistItems() async {
+    if (_currentClientId == null) return;
+
+    final snapshot = await _firestore
+        .collection('clients')
+        .doc(_currentClientId)
+        .collection('playlists')
+        .doc(_activePlaylistId)
+        .collection('items')
+        .orderBy('orderIndex')
+        .get();
+
+    setState(() {
+      _currentPlaylist = snapshot.docs.map((doc) {
+        final data = doc.data();
+        data['id'] = doc.id; // ensure ID is passed
+        return PlaylistItem.fromMap(data);
+      }).toList();
+    });
+  }
+
+  // 👇 NEW: Create a brand new playlist
+  Future<void> _createNewPlaylist(String name, {String? id}) async {
+    final newId = id ?? 'playlist_${DateTime.now().millisecondsSinceEpoch}';
+
+    await _firestore
+        .collection('clients')
+        .doc(_currentClientId)
+        .collection('playlists')
+        .doc(newId)
+        .set({'name': name, 'createdAt': FieldValue.serverTimestamp()});
+
+    await _loadPlaylistsList(); // Refresh the dropdown list
+
+    setState(() {
+      _activePlaylistId = newId;
+      _activePlaylistName = name;
+    });
+    await _loadActivePlaylistItems(); // Will be empty!
+  }
+
+  // 👇 UPDATED: Save items into the specific playlist subcollection
   Future<void> _savePlaylist() async {
     if (_currentClientId == null) return;
     setState(() => _isSaving = true);
 
-    final playlistData = _currentPlaylist.map((item) => item.toMap()).toList();
-    await _firestore.collection('clients').doc(_currentClientId).update({'playlist': playlistData});
+    final batch = _firestore.batch();
+    final itemsRef = _firestore
+        .collection('clients')
+        .doc(_currentClientId)
+        .collection('playlists')
+        .doc(_activePlaylistId)
+        .collection('items');
+
+    // 1. Delete old items to ensure clean sync
+    final oldDocs = await itemsRef.get();
+    for (var doc in oldDocs.docs) {
+      batch.delete(doc.reference);
+    }
+
+    // 2. Save new items with their proper Order Index!
+    for (int i = 0; i < _currentPlaylist.length; i++) {
+      final item = _currentPlaylist[i];
+      final docRef = itemsRef.doc(item.id);
+
+      final data = item.toMap();
+      data['orderIndex'] = i; // 👈 Critical for Kiosk Player
+      data['durationSeconds'] = item.durationInSeconds; // Ensure naming matches player
+
+      batch.set(docRef, data);
+    }
+
+    await batch.commit();
 
     setState(() => _isSaving = false);
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Playlist saved successfully!", style: GoogleFonts.poppins()), backgroundColor: Colors.green));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Playlist '$_activePlaylistName' saved successfully!", style: GoogleFonts.poppins()), backgroundColor: Colors.green));
     }
   }
 
-  /// Documentation:
-  /// Formats a TimeOfDay object into a clean "HH:mm" string for database storage.
+  void _showNewPlaylistDialog() {
+    final TextEditingController nameController = TextEditingController();
+    showDialog(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            backgroundColor: AppColors.glassBackground,
+            title: const Text("Create New Playlist", style: TextStyle(color: Colors.white)),
+            content: TextField(
+              controller: nameController,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(hintText: "e.g., Weekend Promo", hintStyle: TextStyle(color: Colors.white54)),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel", style: TextStyle(color: Colors.white54))),
+              ElevatedButton(
+                onPressed: () {
+                  if (nameController.text.isNotEmpty) {
+                    _createNewPlaylist(nameController.text);
+                    Navigator.pop(context);
+                  }
+                },
+                child: const Text("Create"),
+              )
+            ],
+          );
+        }
+    );
+  }
+
   String _formatTime(TimeOfDay time) {
     final h = time.hour.toString().padLeft(2, '0');
     final m = time.minute.toString().padLeft(2, '0');
     return "$h:$m";
   }
 
-  /// Documentation:
-  /// The Advanced Schedule Popup. Uses a StatefulBuilder so the UI inside the
-  /// dialog can rebuild when the user toggles specific days of the week.
   Future<void> _editSchedulePopup(int index) async {
     final item = _currentPlaylist[index];
 
-    // Local state variables for the dialog
     final TextEditingController durationController = TextEditingController(text: item.durationInSeconds.toString());
     TimeOfDay? tempStartTime = item.startTime != null ? TimeOfDay(hour: int.parse(item.startTime!.split(':')[0]), minute: int.parse(item.startTime!.split(':')[1])) : null;
     TimeOfDay? tempEndTime = item.endTime != null ? TimeOfDay(hour: int.parse(item.endTime!.split(':')[0]), minute: int.parse(item.endTime!.split(':')[1])) : null;
@@ -101,7 +215,6 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // 1. Duration
                       TextField(
                         controller: durationController,
                         keyboardType: TextInputType.number,
@@ -114,8 +227,6 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
                         ),
                       ),
                       const SizedBox(height: 24),
-
-                      // 2. Time Range (Day Parting)
                       Text("Play Window (Optional)", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600)),
                       const SizedBox(height: 8),
                       Row(
@@ -143,7 +254,6 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
                           ),
                         ],
                       ),
-                      // Clear Time Button
                       if (tempStartTime != null || tempEndTime != null)
                         Align(
                           alignment: Alignment.centerRight,
@@ -153,8 +263,6 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
                           ),
                         ),
                       const SizedBox(height: 16),
-
-                      // 3. Days of the Week
                       Text("Days of the Week", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600)),
                       Text("If none selected, plays everyday.", style: GoogleFonts.poppins(color: Colors.white54, fontSize: 12)),
                       const SizedBox(height: 12),
@@ -220,22 +328,18 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
     );
   }
 
-  /// Helper to generate a readable subtitle for the schedule
   String _generateScheduleSubtitle(PlaylistItem item) {
     String sub = "${item.durationInSeconds}s";
-
     if (item.startTime != null && item.endTime != null) {
       sub += " • ${item.startTime} - ${item.endTime}";
     } else {
       sub += " • All Day";
     }
-
     if (item.daysOfWeek.isNotEmpty) {
       sub += " • ${item.daysOfWeek.length} Days/Wk";
     } else {
       sub += " • Everyday";
     }
-
     return sub;
   }
 
@@ -246,7 +350,7 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header Row with Live Preview and Save Buttons
+          // Header Row
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -254,13 +358,52 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
 
               Row(
                 children: [
-                  // Live Preview Button
+                  // 👇 NEW: Dropdown to select which playlist to edit!
+                  if (_availablePlaylists.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      decoration: BoxDecoration(
+                          color: Colors.white12,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.white24)
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          dropdownColor: Colors.grey[900],
+                          value: _activePlaylistId,
+                          icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
+                          style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold),
+                          items: _availablePlaylists.map((playlist) {
+                            return DropdownMenuItem<String>(
+                              value: playlist['id'],
+                              child: Text(playlist['name']),
+                            );
+                          }).toList(),
+                          onChanged: (String? newId) {
+                            if (newId != null) {
+                              setState(() {
+                                _activePlaylistId = newId;
+                                _activePlaylistName = _availablePlaylists.firstWhere((p) => p['id'] == newId)['name'];
+                              });
+                              _loadActivePlaylistItems();
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                  const SizedBox(width: 12),
+
+                  // 👇 NEW: Create New Playlist Button
+                  IconButton(
+                    icon: const Icon(Icons.add_circle, color: Colors.blueAccent, size: 32),
+                    tooltip: "Create New Playlist",
+                    onPressed: _showNewPlaylistDialog,
+                  ),
+                  const SizedBox(width: 24),
+
                   OutlinedButton.icon(
                     onPressed: _currentPlaylist.isEmpty ? null : () {
-                      showDialog(
-                        context: context,
-                        builder: (_) => LivePreviewModal(playlist: _currentPlaylist),
-                      );
+                      showDialog(context: context, builder: (_) => LivePreviewModal(playlist: _currentPlaylist));
                     },
                     icon: const Icon(Icons.play_arrow_rounded),
                     label: Text("Live Preview", style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
@@ -273,7 +416,6 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
                   ),
                   const SizedBox(width: 16),
 
-                  // Save Playlist Button
                   ElevatedButton.icon(
                     onPressed: _isSaving ? null : _savePlaylist,
                     icon: _isSaving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.save_rounded),
@@ -314,7 +456,6 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
                   child: DragTarget<Map<String, dynamic>>(
                     onAcceptWithDetails: (details) {
                       setState(() {
-                        // Pass name and thumbnailUrl when dragging into the playlist
                         _currentPlaylist.add(PlaylistItem(
                           id: DateTime.now().millisecondsSinceEpoch.toString(),
                           url: details.data['url'],
@@ -331,7 +472,7 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text("Active Playlist (Tap to Schedule)", style: GoogleFonts.poppins(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+                            Text("Active Playlist: $_activePlaylistName", style: GoogleFonts.poppins(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
                             const SizedBox(height: 16),
                             Expanded(child: _buildPlaylistView()),
                           ],
@@ -361,8 +502,6 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
           itemBuilder: (context, index) {
             final data = docs[index].data() as Map<String, dynamic>;
             final isVideo = data['type'] == 'video';
-
-            // Extract name and thumbnail
             final fileName = data['name'] ?? 'Unknown Media';
             final thumbUrl = data['thumbnailUrl'] ?? '';
 
@@ -391,8 +530,6 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
       },
       itemBuilder: (context, index) {
         final item = _currentPlaylist[index];
-
-        // Determine the correct display image for the list tile
         final isVideo = item.type == 'video';
         final displayImageUrl = (isVideo && item.thumbnailUrl != null && item.thumbnailUrl!.isNotEmpty)
             ? item.thumbnailUrl!
@@ -405,22 +542,15 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           child: ListTile(
             onTap: () => _editSchedulePopup(index),
-            // Display the thumbnail instead of just an icon
             leading: Container(
               width: 50, height: 50,
               decoration: BoxDecoration(
                 color: Colors.black45,
                 borderRadius: BorderRadius.circular(8),
-                image: displayImageUrl != null ? DecorationImage(
-                  image: NetworkImage(displayImageUrl),
-                  fit: BoxFit.cover,
-                ) : null,
+                image: displayImageUrl != null ? DecorationImage(image: NetworkImage(displayImageUrl), fit: BoxFit.cover) : null,
               ),
-              child: displayImageUrl == null
-                  ? Icon(isVideo ? Icons.play_circle : Icons.image, color: Colors.white)
-                  : null,
+              child: displayImageUrl == null ? Icon(isVideo ? Icons.play_circle : Icons.image, color: Colors.white) : null,
             ),
-            // Display the actual file name instead of "Item 1"
             title: Text(item.name ?? "Item ${index + 1}", style: GoogleFonts.poppins(color: Colors.white), maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: Text(_generateScheduleSubtitle(item), style: GoogleFonts.poppins(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.w500)),
             trailing: IconButton(
@@ -433,9 +563,7 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
     );
   }
 
-  // Updated _buildMediaCard to accept and show the name and thumbnail
   Widget _buildMediaCard(String url, bool isVideo, double? size, String? thumbUrl, String? fileName) {
-    // If it's a video and has a thumbnail, use it. Otherwise, if it's an image, use the main URL.
     final displayUrl = (isVideo && thumbUrl != null && thumbUrl.isNotEmpty) ? thumbUrl : (!isVideo && url.isNotEmpty ? url : null);
 
     return Container(
@@ -452,10 +580,7 @@ class _PlaylistBuilderScreenState extends State<PlaylistBuilderScreen> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // Play button icon in the center if it's a video
           Center(child: Icon(isVideo ? Icons.play_circle_fill : Icons.image, color: Colors.white70, size: 32)),
-
-          // Display the file name at the bottom
           if (fileName != null)
             Positioned(
               bottom: 8, left: 8, right: 8,
